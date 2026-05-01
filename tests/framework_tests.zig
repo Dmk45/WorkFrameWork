@@ -195,7 +195,7 @@ test "section 3 core and advanced layer features" {
     var flat = try lib.layers.flatten(allocator, &x2d);
     defer flat.deinit();
     try std.testing.expectEqualSlices(usize, &[_]usize{ 2, 108 }, flat.shape.?.items);
-    try lib.layers.reshapeDynamic(&flat, allocator, &[_]usize{ 2, 54, 2 });
+    try lib.layers.reshapeDynamic(&flat, &[_]usize{ 2, 54, 2 });
     try std.testing.expectEqualSlices(usize, &[_]usize{ 2, 54, 2 }, flat.shape.?.items);
 
     var dropped = try lib.layers.dropout(allocator, &flat, 0.5, true, 42);
@@ -458,7 +458,7 @@ test "section 10 tensor utility operations" {
     var parts = try lib.core_math.split(allocator, &cat, 2, 1);
     defer {
         for (parts.items) |*p| p.deinit();
-        parts.deinit(allocator);
+        parts.deinit();
     }
     try std.testing.expectEqual(@as(usize, 2), parts.items.len);
 }

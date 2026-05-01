@@ -191,11 +191,11 @@ pub fn transposeBackward(input: *trix.DataObject, d_output: *trix.DataObject, al
 }
 
 /// Gradient computation for reshape: d(input) += reshape(d(output))
-pub fn reshapeBackward(input: *trix.DataObject, d_output: *trix.DataObject, allocator: std.mem.Allocator) !void {
+pub fn reshapeBackward(input: *trix.DataObject, d_output: *trix.DataObject) !void {
     if (input.grad_value == null) return;
 
     // Reshape gradient back to input shape
-    try core.reshape(d_output, input.shape.?.items, allocator);
+    try core.reshape(d_output, input.shape.?.items);
 
     for (0..d_output.values.items.len) |i| {
         input.grad_value.?.items[i] += d_output.values.items[i];
@@ -598,7 +598,7 @@ pub fn executeBackward(
         },
         .Reshape => {
             if (inputs.len >= 1) {
-                try reshapeBackward(inputs[0], output, allocator);
+                try reshapeBackward(inputs[0], output);
             }
         },
         .Sum => {

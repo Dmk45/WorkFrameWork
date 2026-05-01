@@ -258,7 +258,7 @@ pub fn transpose(allocator: std.mem.Allocator, tensor: *trix.DataObject) !trix.D
 
 /// Reshape tensor to new shape (no copy, just metadata change)
 /// Total size must match
-pub fn reshape(tensor: *trix.DataObject, new_shape: []const usize, allocator: std.mem.Allocator) !void {
+pub fn reshape(tensor: *trix.DataObject, new_shape: []const usize) !void {
     // Calculate total size
     var old_size: usize = 1;
     for (tensor.shape.?.items) |dim| {
@@ -473,7 +473,7 @@ pub fn unsqueeze(allocator: std.mem.Allocator, tensor: *trix.DataObject, axis: u
     const s = tensor.shape.?.items;
     if (axis > s.len) return error.ShapeMismatch;
     var new_shape = try std.ArrayList(usize).initCapacity(allocator, s.len + 1);
-    defer new_shape.deinit(allocator);
+    defer new_shape.deinit();
     for (0..s.len + 1) |i| {
         if (i == axis) {
             try new_shape.append(1);

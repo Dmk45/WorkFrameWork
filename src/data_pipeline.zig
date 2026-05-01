@@ -59,12 +59,12 @@ pub const CsvDataset = struct {
         const feature_count = @as(usize, feature_count_u32);
         if (row_count == 0 or feature_count == 0) return error.InvalidBinaryDataset;
 
-        var features = std.ArrayList(f32).empty;
-        errdefer features.deinit(allocator);
+        var features = try std.ArrayList(f32).init(allocator);
+        errdefer features.deinit();
         try features.resize(row_count * feature_count);
 
-        var labels = std.ArrayList(f32).empty;
-        errdefer labels.deinit(allocator);
+        var labels = try std.ArrayList(f32).init(allocator);
+        errdefer labels.deinit();
         try labels.resize(row_count);
 
         for (0..row_count) |r| {
@@ -112,8 +112,8 @@ pub const CsvDataset = struct {
         if (max_val == 0) return error.InvalidImageFile;
 
         const feature_count = width * height;
-        var features = std.ArrayList(f32).empty;
-        errdefer features.deinit(allocator);
+        var features = try std.ArrayList(f32).init(allocator);
+        errdefer features.deinit();
         try features.resize(feature_count);
 
         for (0..feature_count) |i| {
@@ -122,8 +122,8 @@ pub const CsvDataset = struct {
             features.items[i] = @as(f32, @floatFromInt(px)) / @as(f32, @floatFromInt(max_val));
         }
 
-        var labels = std.ArrayList(f32).empty;
-        errdefer labels.deinit(allocator);
+        var labels = try std.ArrayList(f32).init(allocator);
+        errdefer labels.deinit();
         try labels.append(label);
 
         return .{
@@ -178,7 +178,7 @@ pub const CsvDataset = struct {
                 if (known != current_feature_count) return error.InconsistentFeatureCount;
             } else maybe_feature_count = current_feature_count;
 
-            try features.appendSlice(allocator, values.items[0..current_feature_count]);
+            try features.appendSlice(values.items[0..current_feature_count]);
             try labels.append(values.items[current_feature_count]);
             row_count += 1;
         }
@@ -198,8 +198,8 @@ pub const CsvDataset = struct {
     }
 
     pub fn deinit(self: *CsvDataset) void {
-        self.features.deinit(self.allocator);
-        self.labels.deinit(self.allocator);
+        self.features.deinit();
+        self.labels.deinit();
     }
 
     pub fn rowFeatures(self: *const CsvDataset, row_index: usize) ![]const f32 {
@@ -248,8 +248,8 @@ pub const StandardScaler = struct {
     pub fn fit(allocator: std.mem.Allocator, dataset: Dataset, indices: []const usize) !StandardScaler {
         if (indices.len == 0) return error.EmptyDataset;
         const feature_count = dataset.featureCount();
-        var means = std.ArrayList(f32).empty;
-        errdefer means.deinit(allocator);
+        var means = std.ArrayList(f32).init(allocator);
+        errdefer means.deinit();
         try means.resize(feature_count);
         @memset(means.items, 0.0);
 
@@ -262,8 +262,8 @@ pub const StandardScaler = struct {
         const n = @as(f32, @floatFromInt(indices.len));
         for (0..feature_count) |f| means.items[f] /= n;
 
-        var stds = std.ArrayList(f32).empty;
-        errdefer stds.deinit(allocator);
+        var stds = std.ArrayList(f32).init(allocator);
+        errdefer stds.deinit();
         try stds.resize(feature_count);
         @memset(stds.items, 0.0);
         for (indices) |idx| {
@@ -285,8 +285,8 @@ pub const StandardScaler = struct {
     }
 
     pub fn deinit(self: *StandardScaler) void {
-        self.means.deinit(self.allocator);
-        self.stds.deinit(self.allocator);
+        self.means.deinit();
+        self.stds.deinit();
     }
 };
 
@@ -298,11 +298,11 @@ pub const MinMaxScaler = struct {
     pub fn fit(allocator: std.mem.Allocator, dataset: Dataset, indices: []const usize) !MinMaxScaler {
         if (indices.len == 0) return error.EmptyDataset;
         const feature_count = dataset.featureCount();
-        var mins = std.ArrayList(f32).empty;
-        errdefer mins.deinit(allocator);
+        var mins = std.ArrayList(f32).init(allocator);
+        errdefer mins.deinit();
         try mins.resize(feature_count);
-        var maxs = std.ArrayList(f32).empty;
-        errdefer maxs.deinit(allocator);
+        var maxs = std.ArrayList(f32).init(allocator);
+        errdefer maxs.deinit();
         try maxs.resize(feature_count);
         @memset(mins.items, std.math.inf(f32));
         @memset(maxs.items, -std.math.inf(f32));
@@ -327,8 +327,8 @@ pub const MinMaxScaler = struct {
     }
 
     pub fn deinit(self: *MinMaxScaler) void {
-        self.mins.deinit(self.allocator);
-        self.maxs.deinit(self.allocator);
+        self.mins.deinit();
+        self.maxs.deinit();
     }
 };
 
@@ -361,9 +361,9 @@ pub const DataSplit = struct {
     test_indices: std.ArrayList(usize),
 
     pub fn deinit(self: *DataSplit) void {
-        self.train_indices.deinit(self.allocator);
-        self.val_indices.deinit(self.allocator);
-        self.test_indices.deinit(self.allocator);
+        self.train_indices.deinit();
+        self.val_indices.deinit();
+        self.test_indices.deinit();
     }
 };
 
@@ -399,17 +399,17 @@ pub fn splitIndices(
     const safe_val = @min(val_count, total_rows - safe_train);
     const test_start = safe_train + safe_val;
 
-    var train_indices = std.ArrayList(usize).empty;
-    errdefer train_indices.deinit(allocator);
-    try train_indices.appendSlice(allocator, shuffled.items[0..safe_train]);
+    var train_indices = std.ArrayList(usize).init(allocator);
+    errdefer train_indices.deinit();
+    try train_indices.appendSlice(shuffled.items[0..safe_train]);
 
-    var val_indices = std.ArrayList(usize).empty;
-    errdefer val_indices.deinit(allocator);
-    try val_indices.appendSlice(allocator, shuffled.items[safe_train..test_start]);
+    var val_indices = std.ArrayList(usize).init(allocator);
+    errdefer val_indices.deinit();
+    try val_indices.appendSlice(shuffled.items[safe_train..test_start]);
 
-    var test_indices = std.ArrayList(usize).empty;
-    errdefer test_indices.deinit(allocator);
-    try test_indices.appendSlice(allocator, shuffled.items[test_start..]);
+    var test_indices = std.ArrayList(usize).init(allocator);
+    errdefer test_indices.deinit();
+    try test_indices.appendSlice(shuffled.items[test_start..]);
 
     return .{
         .allocator = allocator,
@@ -425,8 +425,8 @@ pub fn shardIndices(
     shard: DistributedShard,
 ) !std.ArrayList(usize) {
     if (shard.world_size == 0 or shard.rank >= shard.world_size) return error.InvalidDistributedShard;
-    var out = std.ArrayList(usize).empty;
-    errdefer out.deinit(allocator);
+    var out = std.ArrayList(usize).init(allocator);
+    errdefer out.deinit();
     for (indices, 0..) |idx, pos| {
         if (pos % shard.world_size == shard.rank) try out.append(idx);
     }
@@ -507,7 +507,7 @@ pub const DataLoader = struct {
     ) !DataLoader {
         if (config.batch_size == 0) return error.InvalidBatchSize;
         var sharded = try shardIndices(allocator, base_indices, config.shard);
-        errdefer sharded.deinit(allocator);
+        errdefer sharded.deinit();
 
         var dl = DataLoader{
             .allocator = allocator,
@@ -517,10 +517,10 @@ pub const DataLoader = struct {
             .position = 0,
             .rng = std.Random.DefaultPrng.init(config.seed),
             .row_buffer = try allocator.alloc(f32, dataset.featureCount()),
-            .batch_features = std.ArrayList(f32).empty,
-            .batch_labels = std.ArrayList(f32).empty,
-            .prefetched_features = std.ArrayList(f32).empty,
-            .prefetched_labels = std.ArrayList(f32).empty,
+            .batch_features = std.ArrayList(f32).init(allocator),
+            .batch_labels = std.ArrayList(f32).init(allocator),
+            .prefetched_features = std.ArrayList(f32).init(allocator),
+            .prefetched_labels = std.ArrayList(f32).init(allocator),
             .prefetched_len = 0,
             .has_prefetched = false,
             .cache = std.AutoHashMap(usize, std.ArrayList(f32)).init(allocator),
@@ -531,13 +531,13 @@ pub const DataLoader = struct {
 
     pub fn deinit(self: *DataLoader) void {
         var it = self.cache.valueIterator();
-        while (it.next()) |arr| arr.deinit(self.allocator);
+        while (it.next()) |arr| arr.deinit();
         self.cache.deinit();
-        self.prefetched_features.deinit(self.allocator);
-        self.prefetched_labels.deinit(self.allocator);
-        self.batch_features.deinit(self.allocator);
-        self.batch_labels.deinit(self.allocator);
-        self.epoch_indices.deinit(self.allocator);
+        self.prefetched_features.deinit();
+        self.prefetched_labels.deinit();
+        self.batch_features.deinit();
+        self.batch_labels.deinit();
+        self.epoch_indices.deinit();
         self.allocator.free(self.row_buffer);
     }
 
@@ -553,8 +553,8 @@ pub const DataLoader = struct {
             if (!self.has_prefetched) return null;
             self.batch_features.clearRetainingCapacity();
             self.batch_labels.clearRetainingCapacity();
-            try self.batch_features.appendSlice(self.allocator, self.prefetched_features.items);
-            try self.batch_labels.appendSlice(self.allocator, self.prefetched_labels.items);
+            try self.batch_features.appendSlice(self.prefetched_features.items);
+            try self.batch_labels.appendSlice(self.prefetched_labels.items);
             const out_len = self.prefetched_len;
             self.has_prefetched = false;
             try self.prefetchNext();
@@ -605,8 +605,8 @@ pub const DataLoader = struct {
             const idx = self.epoch_indices.items[r];
             try self.getRow(idx, self.row_buffer);
             self.config.augmentation.apply(self.row_buffer, &rng);
-            try features_buf.appendSlice(self.allocator, self.row_buffer);
-            try labels_buf.append(self.allocator, try self.dataset.rowLabel(idx));
+            try features_buf.appendSlice(self.row_buffer);
+            try labels_buf.append(try self.dataset.rowLabel(idx));
         }
         self.position = end;
         return end - start;
@@ -621,8 +621,9 @@ pub const DataLoader = struct {
         }
         try self.dataset.fillRowFeatures(idx, out);
         if (self.config.use_cache) {
-            var arr = std.ArrayList(f32).empty;
-            try arr.appendSlice(self.allocator, out);
+            var arr = try std.ArrayList(f32).init(self.allocator);
+            defer arr.deinit();
+            try arr.appendSlice(out);
             try self.cache.put(idx, arr);
         }
     }
@@ -642,25 +643,26 @@ pub const DataLoader = struct {
         var groups = std.AutoHashMap(u32, std.ArrayList(usize)).init(self.allocator);
         defer {
             var g_it = groups.valueIterator();
-            while (g_it.next()) |arr| arr.deinit(self.allocator);
+            while (g_it.next()) |arr| arr.deinit();
             groups.deinit();
         }
         for (self.epoch_indices.items) |idx| {
             const label = try self.dataset.rowLabel(idx);
             const key: u32 = @bitCast(label);
             if (groups.getPtr(key)) |arr| {
-                try arr.append(self.allocator, idx);
+                try arr.append(idx);
             } else {
-                var arr = std.ArrayList(usize).empty;
-                try arr.append(self.allocator, idx);
+                var arr = std.ArrayList(usize).init(self.allocator);
+                defer arr.deinit();
+                try arr.append(idx);
                 try groups.put(key, arr);
             }
         }
 
-        var keys = std.ArrayList(u32).empty;
-        defer keys.deinit(self.allocator);
+        var keys = std.ArrayList(u32).init(self.allocator);
+        defer keys.deinit();
         var it = groups.iterator();
-        while (it.next()) |entry| try keys.append(self.allocator, entry.key_ptr.*);
+        while (it.next()) |entry| try keys.append(entry.key_ptr.*);
 
         var rng = self.rng.random();
         for (keys.items) |key| if (groups.getPtr(key)) |arr| fisherYates(usize, arr.items, &rng);
@@ -678,7 +680,7 @@ pub const DataLoader = struct {
                 var pos = cursor.get(key).?;
                 const arr = groups.getPtr(key).?;
                 if (pos < arr.items.len) {
-                    try self.epoch_indices.append(self.allocator, arr.items[pos]);
+                    try self.epoch_indices.append(arr.items[pos]);
                     pos += 1;
                     try cursor.put(key, pos);
                     added += 1;

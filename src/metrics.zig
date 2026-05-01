@@ -132,7 +132,7 @@ pub const ProgressBar = struct {
             .current = 0,
             .width = width,
             .show_eta = show_eta,
-            .start_time = std.time.nanoTimestamp(),
+            .start_time = @as(i64, std.time.nanoTimestamp()),
         };
     }
 
@@ -160,7 +160,7 @@ pub const ProgressBar = struct {
         std.debug.print("\r[{}]{d:.1}% ({}/{})", .{ bar[0..self.width], percent, self.current, self.total });
 
         if (self.show_eta and self.current > 0) {
-            const current_time = std.time.nanoTimestamp();
+            const current_time = @intCast(i64) std.time.nanoTimestamp();
             const elapsed_ns = current_time - self.start_time;
             const elapsed_s = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0;
             const rate = @as(f64, @floatFromInt(self.current)) / elapsed_s;
@@ -187,7 +187,7 @@ pub const ExperimentTracker = struct {
             .name = name,
             .config = std.json.ObjectMap.init(allocator),
             .metrics = std.json.ObjectMap.init(allocator),
-            .start_time = @intCast(std.time.nanoTimestamp()),
+            .start_time = @as(i64, std.time.nanoTimestamp()),
             .allocator = allocator,
         };
     }
@@ -218,7 +218,7 @@ pub const ExperimentTracker = struct {
         const file = try std.fs.cwd().createFile(path, .{ .truncate = true });
         defer file.close();
 
-        const end_time = std.time.nanoTimestamp();
+        const end_time = @intCast(i64) std.time.nanoTimestamp();
         const duration_ns = end_time - self.start_time;
         const duration_s = @as(f64, @floatFromInt(duration_ns)) / 1_000_000_000.0;
 

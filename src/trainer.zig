@@ -17,11 +17,11 @@ pub const TrainingHistory = struct {
     epochs: std.ArrayList(EpochStats),
 
     pub fn init(allocator: std.mem.Allocator) TrainingHistory {
-        return .{ .allocator = allocator, .epochs = std.ArrayList(EpochStats).empty };
+        return .{ .allocator = allocator, .epochs = std.ArrayList(EpochStats).init(allocator) };
     }
 
     pub fn deinit(self: *TrainingHistory) void {
-        self.epochs.deinit(self.allocator);
+        self.epochs.deinit();
     }
 };
 
@@ -49,15 +49,15 @@ pub const Trainer = struct {
     pub fn init(allocator: std.mem.Allocator, model: *layers.NeuralNetwork, optimizer: *grad.Adam, config: TrainerConfig) !Trainer {
         var logger: ?metrics.FileLogger = null;
         var tracker: ?metrics.ExperimentTracker = null;
-        
+
         if (config.log_file) |log_path| {
             logger = try metrics.FileLogger.init(allocator, log_path);
         }
-        
+
         if (config.experiment_name) |exp_name| {
             tracker = try metrics.ExperimentTracker.init(allocator, exp_name);
         }
-        
+
         return .{
             .allocator = allocator,
             .model = model,
@@ -92,65 +92,59 @@ pub const Trainer = struct {
     }
 
     pub fn evaluate(self: *Trainer, x: *trix.DataObject, y: *trix.DataObject) !struct { loss: f32, metrics: ?metrics.ClassificationMetrics } {
-    var pred = try self.model.forward(self.allocator, x);
-    defer pred.deinit();
-    const loss = try grad.meanSquaredError(&pred, y);
-    
-    var eval_metrics: ?metrics.ClassificationMetrics = null;
-    if (self.config.compute_metrics) {
-        eval_metrics = try metrics.ClassificationMetrics.compute(&pred, y, self.config.threshold, self.allocator);
-        if (eval_metrics.?.auc == null) {
-            const auc = try metrics.ClassificationMetrics.computeAUC(&pred, y);
-            eval_metrics.?.auc = auc;
+        var pred = try self.model.forward(self.allocator, x);
+        defer pred.deinit();
+        const loss = try grad.meanSquaredError(&pred, y);
+
+        var eval_metrics: ?metrics.ClassificationMetrics = null;
+        if (self.config.compute_metrics) {
+            eval_metrics = try metrics.ClassificationMetrics.compute(&pred, y, self.config.threshold, self.allocator);
+            if (eval_metrics.?.auc == null) {
+                const auc = try metrics.ClassificationMetrics.computeAUC(&pred, y);
+                eval_metrics.?.auc = auc;
+            }
         }
+
+        return .{ .loss = loss, .metrics = eval_metrics };
     }
-    
-    return .{ .loss = loss, .metrics = eval_metrics };
-}
 
     pub fn fit(self: *Trainer, train_x: *trix.DataObject, train_y: *trix.DataObject, val_x: *trix.DataObject, val_y: *trix.DataObject) !void {
         if (self.config.show_progress) {
             self.progress_bar = metrics.ProgressBar.init(self.config.epochs, 50, true);
         }
-        
+
         for (0..self.config.epochs) |epoch| {
             const epoch_start_time = std.time.nanoTimestamp();
-            
+
             const train_loss = try self.trainEpoch(train_x, train_y);
             const val_result = try self.evaluate(val_x, val_y);
-            
+
             if (val_result.loss < self.best_val_loss) self.best_val_loss = val_result.loss;
-            
+
             const epoch_end_time = std.time.nanoTimestamp();
             const epoch_time = @as(f64, @floatFromInt(epoch_end_time - epoch_start_time)) / 1_000_000_000.0;
-            
-            try self.history.epochs.append(self.allocator, .{ 
-                .train_loss = train_loss, 
-                .val_loss = val_result.loss, 
-                .metrics = val_result.metrics,
-                .learning_rate = self.optimizer.lr,
-                .epoch_time = epoch_time
-            });
-            
+
+            try self.history.epochs.append(self.allocator, .{ .train_loss = train_loss, .val_loss = val_result.loss, .metrics = val_result.metrics, .learning_rate = self.optimizer.lr, .epoch_time = epoch_time });
+
             if (self.config.show_progress) {
                 if (self.progress_bar) |*pb| {
                     pb.update(epoch + 1);
                 }
-                
+
                 std.debug.print("Epoch {}/{} - train_loss: {:.4f}, val_loss: {:.4f}", .{ epoch + 1, self.config.epochs, train_loss, val_result.loss });
                 if (val_result.metrics) |*m| {
                     std.debug.print(", accuracy: {:.4f}, f1: {:.4f}", .{ m.accuracy, m.f1_score orelse 0.0 });
                 }
                 std.debug.print("\n");
             }
-            
+
             if (self.logger) |*l| {
                 try l.log("Epoch {}: train_loss={:.4f}, val_loss={:.4f}", .{ epoch + 1, train_loss, val_result.loss });
                 if (val_result.metrics) |*m| {
                     try l.logMetrics(epoch + 1, m.*);
                 }
             }
-            
+
             if (self.tracker) |*t| {
                 try t.logMetric("train_loss", train_loss);
                 try t.logMetric("val_loss", val_result.loss);
@@ -163,7 +157,7 @@ pub const Trainer = struct {
                 }
             }
         }
-        
+
         if (self.tracker) |*t| {
             const exp_path = try std.fmt.allocPrint(self.allocator, "{}.json", .{self.config.experiment_name.?});
             defer self.allocator.free(exp_path);

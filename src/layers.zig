@@ -483,8 +483,8 @@ pub fn flatten(allocator: std.mem.Allocator, input: *trix.DataObject) !trix.Data
     return out;
 }
 
-pub fn reshapeDynamic(input: *trix.DataObject, allocator: std.mem.Allocator, new_shape: []const usize) !void {
-    try core.reshape(input, new_shape, allocator);
+pub fn reshapeDynamic(input: *trix.DataObject, new_shape: []const usize) !void {
+    try core.reshape(input, new_shape);
 }
 
 pub fn dropout(allocator: std.mem.Allocator, input: *trix.DataObject, drop_prob: f32, training: bool, seed: u64) !trix.DataObject {
