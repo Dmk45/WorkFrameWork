@@ -621,8 +621,7 @@ pub const DataLoader = struct {
         }
         try self.dataset.fillRowFeatures(idx, out);
         if (self.config.use_cache) {
-            var arr = try std.ArrayList(f32).init(self.allocator);
-            defer arr.deinit();
+            var arr = std.ArrayList(f32).init(self.allocator);
             try arr.appendSlice(out);
             try self.cache.put(idx, arr);
         }

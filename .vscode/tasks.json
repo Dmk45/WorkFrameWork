@@ -1,0 +1,25 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "zig test",
+      "type": "shell",
+      "command": "zig build test",
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "zig test (filter)",
+      "type": "shell",
+      "command": "zig build test -Dtest-filter=\"${input:testName}\"",
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "testName",
+      "type": "promptString",
+      "description": "Enter test filter"
+    }
+  ]
+}

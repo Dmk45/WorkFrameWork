@@ -10,6 +10,11 @@ pub const ClassificationMetrics = struct {
     auc: ?f32,
     confusion_matrix: ?[][]usize,
 
+    const PredictionPair = struct {
+        pred: f32,
+        label: f32,
+    };
+
     pub fn compute(y_pred: *trix.DataObject, y_true: *trix.DataObject, threshold: f32, allocator: std.mem.Allocator) !ClassificationMetrics {
         if (y_pred.values.items.len != y_true.values.items.len) return error.ShapeMismatch;
 
@@ -21,8 +26,8 @@ pub const ClassificationMetrics = struct {
 
         // Basic metrics computation
         for (0..n) |i| {
-            const pred_label = if (y_pred.values.items[i] >= threshold) 1 else 0;
-            const true_label = if (y_true.values.items[i] >= 0.5) 1 else 0;
+            const pred_label: u32 = if (y_pred.values.items[i] >= threshold) 1 else 0;
+            const true_label: u32 = if (y_true.values.items[i] >= 0.5) 1 else 0;
 
             if (pred_label == 1 and true_label == 1) tp += 1;
             if (pred_label == 1 and true_label == 0) fp += 1;
@@ -73,17 +78,17 @@ pub const ClassificationMetrics = struct {
         const n = y_pred.values.items.len;
 
         // Create pairs of (prediction, true_label)
-        var pairs = try std.ArrayList(struct { pred: f32, label: f32 }).initCapacity(y_pred.allocator, n);
+        var pairs = try std.ArrayList(PredictionPair).initCapacity(y_pred.allocator, n);
         for (0..n) |i| {
-            try pairs.append(y_pred.allocator, .{
+            try pairs.append(.{
                 .pred = y_pred.values.items[i],
                 .label = y_true.values.items[i],
             });
         }
 
         // Sort by prediction score
-        std.sort.sort(struct { pred: f32, label: f32 }, pairs.items, {}, struct {
-            fn lessThan(_: void, a: struct { pred: f32, label: f32 }, b: struct { pred: f32, label: f32 }) bool {
+        std.mem.sort(PredictionPair, pairs.items, {}, struct {
+            fn lessThan(_: void, a: PredictionPair, b: PredictionPair) bool {
                 return a.pred < b.pred;
             }
         }.lessThan);
@@ -124,7 +129,7 @@ pub const ProgressBar = struct {
     current: usize,
     width: usize,
     show_eta: bool,
-    start_time: i64,
+    start_time: i128,
 
     pub fn init(total: usize, width: usize, show_eta: bool) ProgressBar {
         return .{
@@ -132,7 +137,7 @@ pub const ProgressBar = struct {
             .current = 0,
             .width = width,
             .show_eta = show_eta,
-            .start_time = @as(i64, std.time.nanoTimestamp()),
+            .start_time = std.time.nanoTimestamp(),
         };
     }
 
@@ -157,10 +162,10 @@ pub const ProgressBar = struct {
         bar[self.width] = 0;
 
         const percent = progress * 100.0;
-        std.debug.print("\r[{}]{d:.1}% ({}/{})", .{ bar[0..self.width], percent, self.current, self.total });
+        std.debug.print("\r[{s}]{d:.1}% ({}/{})", .{ bar[0..self.width], percent, self.current, self.total });
 
         if (self.show_eta and self.current > 0) {
-            const current_time = @intCast(i64) std.time.nanoTimestamp();
+            const current_time: i128 = std.time.nanoTimestamp();
             const elapsed_ns = current_time - self.start_time;
             const elapsed_s = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0;
             const rate = @as(f64, @floatFromInt(self.current)) / elapsed_s;
@@ -169,7 +174,7 @@ pub const ProgressBar = struct {
         }
 
         if (self.current == self.total) {
-            std.debug.print("\n");
+            std.debug.print("\n", .{});
         }
     }
 };
@@ -179,7 +184,7 @@ pub const ExperimentTracker = struct {
     name: []const u8,
     config: std.json.ObjectMap,
     metrics: std.json.ObjectMap,
-    start_time: i64,
+    start_time: i128,
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, name: []const u8) !ExperimentTracker {
@@ -187,7 +192,7 @@ pub const ExperimentTracker = struct {
             .name = name,
             .config = std.json.ObjectMap.init(allocator),
             .metrics = std.json.ObjectMap.init(allocator),
-            .start_time = @as(i64, std.time.nanoTimestamp()),
+            .start_time = std.time.nanoTimestamp(),
             .allocator = allocator,
         };
     }
@@ -218,7 +223,7 @@ pub const ExperimentTracker = struct {
         const file = try std.fs.cwd().createFile(path, .{ .truncate = true });
         defer file.close();
 
-        const end_time = @intCast(i64) std.time.nanoTimestamp();
+        const end_time: i128 = std.time.nanoTimestamp();
         const duration_ns = end_time - self.start_time;
         const duration_s = @as(f64, @floatFromInt(duration_ns)) / 1_000_000_000.0;
 
@@ -230,7 +235,8 @@ pub const ExperimentTracker = struct {
         try experiment_obj.put("config", std.json.Value{ .object = self.config });
         try experiment_obj.put("metrics", std.json.Value{ .object = self.metrics });
 
-        const json_str = try std.json.stringifyAlloc(self.allocator, experiment_obj, .{ .whitespace = .indent_2 });
+        const json_value = std.json.Value{ .object = experiment_obj };
+        const json_str = try std.json.stringifyAlloc(self.allocator, json_value, .{ .whitespace = .indent_2 });
         defer self.allocator.free(json_str);
 
         try file.writeAll(json_str);
@@ -318,9 +324,10 @@ pub const FileLogger = struct {
 
     pub fn log(self: *FileLogger, comptime format: []const u8, args: anytype) !void {
         const timestamp = std.time.timestamp();
-        const message = try std.fmt.allocPrint(self.allocator, "[{}] " ++ format ++ "\n", .{timestamp} ++ args);
-        defer self.allocator.free(message);
-        try self.file.writeAll(message);
+        var buffer: [4096]u8 = undefined;
+        const timestamped_msg = try std.fmt.bufPrint(&buffer, "[{d}] " ++ format, .{timestamp} ++ args);
+        try self.file.writeAll(timestamped_msg);
+        try self.file.writeAll("\n");
     }
 
     pub fn logMetrics(self: *FileLogger, epoch: usize, metrics: ClassificationMetrics) !void {

@@ -138,9 +138,9 @@ pub const GraphVisualizer = struct {
         while (tensor_iter.next()) |entry| {
             const id = entry.key_ptr.*;
             const tensor = entry.value_ptr.*;
-            const label = try std.fmt.allocPrint(self.allocator, "T{}\\nshape: {any}", .{ id, tensor.shape.? });
+            const label = try std.fmt.allocPrint(self.allocator, "T{d}\\nshape: {any}", .{ id, tensor.shape.? });
             defer self.allocator.free(label);
-            try writer.print("  T{} [label=\"{}\"];\n", .{ id, label });
+            try writer.print("  T{d} [label=\"{s}\"];\n", .{ id, label });
         }
 
         try writer.writeAll("\n");
@@ -148,24 +148,24 @@ pub const GraphVisualizer = struct {
         // Write operation nodes and edges
         for (self.ops.items) |op| {
             const op_name = @tagName(op.op);
-            try writer.print("  O{} [label=\"{}\", shape=ellipse, style=filled, fillcolor=lightblue];\n", .{ op.output_id, op_name });
+            try writer.print("  O{d} [label=\"{s}\", shape=ellipse, style=filled, fillcolor=lightblue];\n", .{ op.output_id, op_name });
 
             // Edges from inputs to operation
             for (op.input_ids.items) |input_id| {
-                try writer.print("  T{} -> O{};\n", .{ input_id, op.output_id });
+                try writer.print("  T{d} -> O{d};\n", .{ input_id, op.output_id });
             }
 
             // Edge from operation to output
-            try writer.print("  O{} -> T{};\n", .{ op.output_id, op.output_id });
+            try writer.print("  O{d} -> T{d};\n", .{ op.output_id, op.output_id });
         }
 
         try writer.writeAll("}\n");
     }
 
     pub fn printSummary(self: *Tape) void {
-        std.debug.print("Computation Graph Summary:\n");
-        std.debug.print("  Tensors: {}\n", .{self.tensors.count()});
-        std.debug.print("  Operations: {}\n", .{self.ops.items.len});
-        std.debug.print("  Next ID: {}\n", .{self.next_id});
+        std.debug.print("Computation Graph Summary:\n", .{});
+        std.debug.print("  Tensors: {d}\n", .{self.tensors.count()});
+        std.debug.print("  Operations: {d}\n", .{self.ops.items.len});
+        std.debug.print("  Next ID: {d}\n", .{self.next_id});
     }
 };

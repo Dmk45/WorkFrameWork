@@ -124,22 +124,22 @@ pub const Trainer = struct {
             const epoch_end_time = std.time.nanoTimestamp();
             const epoch_time = @as(f64, @floatFromInt(epoch_end_time - epoch_start_time)) / 1_000_000_000.0;
 
-            try self.history.epochs.append(self.allocator, .{ .train_loss = train_loss, .val_loss = val_result.loss, .metrics = val_result.metrics, .learning_rate = self.optimizer.lr, .epoch_time = epoch_time });
+            try self.history.epochs.append(.{ .train_loss = train_loss, .val_loss = val_result.loss, .metrics = val_result.metrics, .learning_rate = self.optimizer.lr, .epoch_time = epoch_time });
 
             if (self.config.show_progress) {
                 if (self.progress_bar) |*pb| {
                     pb.update(epoch + 1);
                 }
 
-                std.debug.print("Epoch {}/{} - train_loss: {:.4f}, val_loss: {:.4f}", .{ epoch + 1, self.config.epochs, train_loss, val_result.loss });
+                std.debug.print("Epoch {}/{} - train_loss: {:.4}, val_loss: {:.4}", .{ epoch + 1, self.config.epochs, train_loss, val_result.loss });
                 if (val_result.metrics) |*m| {
-                    std.debug.print(", accuracy: {:.4f}, f1: {:.4f}", .{ m.accuracy, m.f1_score orelse 0.0 });
+                    std.debug.print(", accuracy: {:.4}, f1: {:.4}", .{ m.accuracy, m.f1_score orelse 0.0 });
                 }
-                std.debug.print("\n");
+                std.debug.print("\n", .{});
             }
 
             if (self.logger) |*l| {
-                try l.log("Epoch {}: train_loss={:.4f}, val_loss={:.4f}", .{ epoch + 1, train_loss, val_result.loss });
+                try l.log("Epoch {}: train_loss={:.4}, val_loss={:.4}", .{ epoch + 1, train_loss, val_result.loss });
                 if (val_result.metrics) |*m| {
                     try l.logMetrics(epoch + 1, m.*);
                 }
