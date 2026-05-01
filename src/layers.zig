@@ -179,6 +179,11 @@ pub const NeuralNetwork = struct {
         self.layers.deinit();
     }
 
+    pub fn add_linear(self: *NeuralNetwork, input_size: usize, output_size: usize, activation: []const u8) !void {
+        const layer = try LinearLayer.init(self.allocator, input_size, output_size, activation);
+        try self.layers.append(layer);
+    }
+
     pub fn get_layer(self: *NeuralNetwork, idx: usize) ?*LinearLayer {
         if (idx < self.layers.items.len) {
             return &self.layers.items[idx];

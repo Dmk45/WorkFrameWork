@@ -275,18 +275,18 @@ pub fn reshape(tensor: *trix.DataObject, new_shape: []const usize, allocator: st
     }
 
     // Update shape
-    tensor.shape.?.clearAndFree(allocator);
+    tensor.shape.?.clearAndFree();
     for (new_shape) |dim| {
         try tensor.shape.?.append(dim);
     }
 
     // Recalculate strides
-    tensor.strides.?.clearAndFree(allocator);
+    tensor.strides.?.clearAndFree();
     var total_size: usize = 1;
     var i: usize = new_shape.len;
     while (i > 0) {
         i -= 1;
-        try tensor.strides.?.insert(allocator, 0, total_size);
+        try tensor.strides.?.insert(0, total_size);
         total_size *= new_shape[i];
     }
 }
@@ -459,7 +459,7 @@ pub fn squeeze(allocator: std.mem.Allocator, tensor: *trix.DataObject, axis: usi
     const s = tensor.shape.?.items;
     if (axis >= s.len or s[axis] != 1) return error.ShapeMismatch;
     var new_shape = try std.ArrayList(usize).initCapacity(allocator, s.len - 1);
-    defer new_shape.deinit(allocator);
+    defer new_shape.deinit();
     for (s, 0..) |dim, i| {
         if (i != axis) try new_shape.append(dim);
     }
@@ -515,7 +515,7 @@ pub fn concatenate(allocator: std.mem.Allocator, tensors: []const *trix.DataObje
     } else {
         const rows = base[0];
         var col_offsets = try std.ArrayList(usize).initCapacity(allocator, tensors.len);
-        defer col_offsets.deinit(allocator);
+        defer col_offsets.deinit();
         var running: usize = 0;
         for (tensors) |t| {
             try col_offsets.append(running);

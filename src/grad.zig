@@ -332,8 +332,8 @@ pub const CyclicLR = struct {
     step_size_down: usize,
     mode: []const u8, // "triangular", "triangular2", "exp_range"
     gamma: f32,
-    scale_fn: ?fn(f32, f32, f32) f32,
-    
+    scale_fn: ?fn (f32, f32, f32) f32,
+
     pub fn init(base_lr: f32, max_lr: f32, step_size_up: usize, step_size_down: usize, mode: []const u8) CyclicLR {
         return .{
             .base_lr = base_lr,
@@ -345,19 +345,19 @@ pub const CyclicLR = struct {
             .scale_fn = null,
         };
     }
-    
+
     pub fn step(self: CyclicLR, epoch: usize) f32 {
         const cycle = @divFloor(epoch, self.step_size_up + self.step_size_down);
         const x = @as(f32, @floatFromInt(@mod(epoch, self.step_size_up + self.step_size_down)));
         const step_size_up_f = @as(f32, @floatFromInt(self.step_size_up));
-        
+
         var base_lr = self.base_lr;
         if (std.mem.eql(u8, self.mode, "triangular2")) {
             base_lr = self.base_lr / std.math.pow(f32, 2.0, @as(f32, @floatFromInt(cycle)));
         } else if (std.mem.eql(u8, self.mode, "exp_range")) {
             base_lr = self.base_lr * std.math.pow(f32, self.gamma, @as(f32, @floatFromInt(epoch)));
         }
-        
+
         if (x <= step_size_up_f) {
             // Ascending phase
             const scale = (self.max_lr - base_lr) * (x / step_size_up_f);
@@ -379,12 +379,12 @@ pub const ReduceLROnPlateau = struct {
     cooldown: usize,
     min_lr: f32,
     eps: f32,
-    
+
     best: f32,
     num_bad_epochs: usize,
     last_epoch: usize,
     in_cooldown: bool,
-    
+
     pub fn init(mode: []const u8, factor: f32, patience: usize, threshold: f32, threshold_mode: []const u8, cooldown: usize, min_lr: f32, eps: f32) ReduceLROnPlateau {
         return .{
             .mode = mode,
@@ -401,36 +401,36 @@ pub const ReduceLROnPlateau = struct {
             .in_cooldown = false,
         };
     }
-    
+
     pub fn step(self: *ReduceLROnPlateau, base_lr: f32, metric: f32, epoch: usize) f32 {
         if (epoch == self.last_epoch) return base_lr;
         self.last_epoch = epoch;
-        
+
         if (self.in_cooldown) {
             self.in_cooldown = false;
             self.num_bad_epochs = 0;
             return base_lr;
         }
-        
+
         const is_better = if (std.mem.eql(u8, self.mode, "min"))
             metric < self.best - self.threshold
         else
             metric > self.best + self.threshold;
-            
+
         if (is_better) {
             self.best = metric;
             self.num_bad_epochs = 0;
         } else {
             self.num_bad_epochs += 1;
         }
-        
+
         if (self.num_bad_epochs >= self.patience) {
             const new_lr = @max(self.min_lr, base_lr * self.factor);
             self.num_bad_epochs = 0;
             self.in_cooldown = true;
             return new_lr;
         }
-        
+
         return base_lr;
     }
 };
@@ -498,7 +498,7 @@ pub fn focalLoss(y_pred: *trix.DataObject, y_true: *trix.DataObject, alpha: f32,
     if (y_pred.values.items.len != y_true.values.items.len) return error.ShapeMismatch;
     const n = @as(f32, @floatFromInt(y_pred.values.items.len));
     var loss: f32 = 0.0;
-    
+
     for (0..y_pred.values.items.len) |i| {
         const p = std.math.clamp(y_pred.values.items[i], 1e-7, 1.0 - 1e-7);
         const y = y_true.values.items[i];
@@ -507,7 +507,7 @@ pub fn focalLoss(y_pred: *trix.DataObject, y_true: *trix.DataObject, alpha: f32,
         const focal_weight = std.math.pow(f32, 1.0 - pt, gamma);
         loss += alpha * focal_weight * ce_loss;
     }
-    
+
     if (y_pred.grad) {
         try y_pred.ensureGradValue();
         for (0..y_pred.values.items.len) |i| {
@@ -519,7 +519,7 @@ pub fn focalLoss(y_pred: *trix.DataObject, y_true: *trix.DataObject, alpha: f32,
             y_pred.grad_value.?.items[i] += grad;
         }
     }
-    
+
     return loss / n;
 }
 
@@ -529,14 +529,14 @@ pub fn labelSmoothingLoss(y_pred: *trix.DataObject, y_true: *trix.DataObject, sm
     const n = @as(f32, @floatFromInt(y_pred.values.items.len));
     const smooth_value = smoothing / @as(f32, @floatFromInt(num_classes));
     var loss: f32 = 0.0;
-    
+
     for (0..y_pred.values.items.len) |i| {
         const p = std.math.clamp(y_pred.values.items[i], 1e-7, 1.0 - 1e-7);
         const y = y_true.values.items[i];
         const target = if (y == 1.0) 1.0 - smoothing else smooth_value;
         loss += -target * std.math.log(f32, std.math.e, p);
     }
-    
+
     if (y_pred.grad) {
         try y_pred.ensureGradValue();
         for (0..y_pred.values.items.len) |i| {
@@ -546,7 +546,7 @@ pub fn labelSmoothingLoss(y_pred: *trix.DataObject, y_true: *trix.DataObject, sm
             y_pred.grad_value.?.items[i] += -(target / (p * n));
         }
     }
-    
+
     return loss / n;
 }
 
@@ -555,7 +555,7 @@ pub fn quantileLoss(y_pred: *trix.DataObject, y_true: *trix.DataObject, quantile
     if (y_pred.values.items.len != y_true.values.items.len) return error.ShapeMismatch;
     const n = @as(f32, @floatFromInt(y_pred.values.items.len));
     var loss: f32 = 0.0;
-    
+
     for (0..y_pred.values.items.len) |i| {
         const diff = y_true.values.items[i] - y_pred.values.items[i];
         if (diff >= 0.0) {
@@ -564,7 +564,7 @@ pub fn quantileLoss(y_pred: *trix.DataObject, y_true: *trix.DataObject, quantile
             loss += (quantile - 1.0) * diff;
         }
     }
-    
+
     if (y_pred.grad) {
         try y_pred.ensureGradValue();
         for (0..y_pred.values.items.len) |i| {
@@ -573,7 +573,7 @@ pub fn quantileLoss(y_pred: *trix.DataObject, y_true: *trix.DataObject, quantile
             y_pred.grad_value.?.items[i] += grad / n;
         }
     }
-    
+
     return loss / n;
 }
 
@@ -582,12 +582,12 @@ pub fn logCoshLoss(y_pred: *trix.DataObject, y_true: *trix.DataObject) !f32 {
     if (y_pred.values.items.len != y_true.values.items.len) return error.ShapeMismatch;
     const n = @as(f32, @floatFromInt(y_pred.values.items.len));
     var loss: f32 = 0.0;
-    
+
     for (0..y_pred.values.items.len) |i| {
         const diff = y_pred.values.items[i] - y_true.values.items[i];
         loss += std.math.log(f32, std.math.e, std.math.cosh(diff));
     }
-    
+
     if (y_pred.grad) {
         try y_pred.ensureGradValue();
         for (0..y_pred.values.items.len) |i| {
@@ -596,7 +596,7 @@ pub fn logCoshLoss(y_pred: *trix.DataObject, y_true: *trix.DataObject) !f32 {
             y_pred.grad_value.?.items[i] += grad / n;
         }
     }
-    
+
     return loss / n;
 }
 
@@ -605,27 +605,27 @@ pub fn tripletLoss(anchor: *trix.DataObject, positive: *trix.DataObject, negativ
     if (anchor.values.items.len != positive.values.items.len or anchor.values.items.len != negative.values.items.len) {
         return error.ShapeMismatch;
     }
-    
+
     var pos_dist: f32 = 0.0;
     var neg_dist: f32 = 0.0;
-    
+
     for (0..anchor.values.items.len) |i| {
         const pos_diff = anchor.values.items[i] - positive.values.items[i];
         const neg_diff = anchor.values.items[i] - negative.values.items[i];
         pos_dist += pos_diff * pos_diff;
         neg_dist += neg_diff * neg_diff;
     }
-    
+
     pos_dist = std.math.sqrt(pos_dist);
     neg_dist = std.math.sqrt(neg_dist);
     const loss = @max(0.0, pos_dist - neg_dist + margin);
-    
+
     // Compute gradients if enabled
     if (anchor.grad or positive.grad or negative.grad) {
         if (pos_dist - neg_dist + margin > 0.0) {
             const scale = 1.0 / pos_dist;
             const scale_neg = 1.0 / neg_dist;
-            
+
             if (anchor.grad) {
                 try anchor.ensureGradValue();
                 for (0..anchor.values.items.len) |i| {
@@ -634,7 +634,7 @@ pub fn tripletLoss(anchor: *trix.DataObject, positive: *trix.DataObject, negativ
                     anchor.grad_value.?.items[i] += pos_grad - neg_grad;
                 }
             }
-            
+
             if (positive.grad) {
                 try positive.ensureGradValue();
                 for (0..positive.values.items.len) |i| {
@@ -642,7 +642,7 @@ pub fn tripletLoss(anchor: *trix.DataObject, positive: *trix.DataObject, negativ
                     positive.grad_value.?.items[i] += grad;
                 }
             }
-            
+
             if (negative.grad) {
                 try negative.ensureGradValue();
                 for (0..negative.values.items.len) |i| {
@@ -652,7 +652,7 @@ pub fn tripletLoss(anchor: *trix.DataObject, positive: *trix.DataObject, negativ
             }
         }
     }
-    
+
     return loss;
 }
 
@@ -661,11 +661,11 @@ pub fn contrastiveLoss(y_pred: *trix.DataObject, y_true: *trix.DataObject, margi
     if (y_pred.values.items.len != y_true.values.items.len) return error.ShapeMismatch;
     const n = @as(f32, @floatFromInt(y_pred.values.items.len));
     var loss: f32 = 0.0;
-    
+
     for (0..y_pred.values.items.len) |i| {
         const dist_sq = y_pred.values.items[i] * y_pred.values.items[i];
         const y = y_true.values.items[i];
-        
+
         if (y == 1.0) {
             loss += dist_sq;
         } else {
@@ -673,24 +673,25 @@ pub fn contrastiveLoss(y_pred: *trix.DataObject, y_true: *trix.DataObject, margi
             loss += margin_dist * margin_dist;
         }
     }
-    
+
     if (y_pred.grad) {
         try y_pred.ensureGradValue();
         for (0..y_pred.values.items.len) |i| {
             const dist = y_pred.values.items[i];
             const y = y_true.values.items[i];
-            
+
             if (y == 1.0) {
                 y_pred.grad_value.?.items[i] += 2.0 * dist / n;
             } else {
                 const margin_dist = @max(0.0, margin - @abs(dist));
                 if (margin_dist > 0.0 and dist != 0.0) {
-                    y_pred.grad_value.?.items[i] += -2.0 * margin_dist * @sign(dist) / n;
+                    const sign_dist = if (dist > 0.0) 1.0 else -1.0;
+                    y_pred.grad_value.?.items[i] += -2.0 * margin_dist * sign_dist / n;
                 }
             }
         }
     }
-    
+
     return loss / n;
 }
 
@@ -698,11 +699,11 @@ pub fn contrastiveLoss(y_pred: *trix.DataObject, y_true: *trix.DataObject, margi
 pub fn infoNCELoss(features: *trix.DataObject, temperature: f32) !f32 {
     const batch_size = features.shape.?.items[0];
     const feature_dim = features.shape.?.items[1];
-    
+
     // Normalize features
     var normalized = try trix.DataObject.init(features.allocator, &[_]usize{ batch_size, feature_dim }, .f32);
     defer normalized.deinit();
-    
+
     for (0..batch_size) |i| {
         var norm: f32 = 0.0;
         for (0..feature_dim) |j| {
@@ -710,19 +711,19 @@ pub fn infoNCELoss(features: *trix.DataObject, temperature: f32) !f32 {
             norm += val * val;
         }
         norm = std.math.sqrt(norm) + 1e-8;
-        
+
         for (0..feature_dim) |j| {
             const val = features.get(&[_]usize{ i, j });
             try normalized.set(i * feature_dim + j, val / norm);
         }
     }
-    
+
     // Compute similarity matrix
     var loss: f32 = 0.0;
     for (0..batch_size) |i| {
         var numerator: f32 = 0.0;
         var denominator: f32 = 0.0;
-        
+
         for (0..batch_size) |j| {
             var dot_product: f32 = 0.0;
             for (0..feature_dim) |k| {
@@ -730,16 +731,16 @@ pub fn infoNCELoss(features: *trix.DataObject, temperature: f32) !f32 {
             }
             const similarity = dot_product / temperature;
             const exp_sim = std.math.exp(similarity);
-            
+
             if (j == i) {
                 numerator = exp_sim;
             }
             denominator += exp_sim;
         }
-        
+
         loss -= std.math.log(f32, std.math.e, numerator / denominator);
     }
-    
+
     return loss / @as(f32, @floatFromInt(batch_size));
 }
 
@@ -832,9 +833,9 @@ pub const AdaBound = struct {
             const m_hat = self.m.?.items[i] / (1.0 - std.math.pow(f32, self.beta1, t_f));
             const v_hat = self.v.?.items[i] / (1.0 - std.math.pow(f32, self.beta2, t_f));
 
-            const step = m_hat / (std.math.sqrt(v_hat) + self.epsilon);
+            const step_size = m_hat / (std.math.sqrt(v_hat) + self.epsilon);
             const bounded_lr = std.math.clamp(self.lr, lower_bound, upper_bound);
-            param.values.items[i] -= bounded_lr * step;
+            param.values.items[i] -= bounded_lr * step_size;
         }
 
         @memset(param.grad_value.?.items, 0.0);
@@ -896,7 +897,7 @@ pub const LAMB = struct {
 
         for (0..param.values.items.len) |i| {
             const g = param.grad_value.?.items[i];
-            
+
             self.m.?.items[i] = self.beta1 * self.m.?.items[i] + (1.0 - self.beta1) * g;
             self.v.?.items[i] = self.beta2 * self.v.?.items[i] + (1.0 - self.beta2) * g * g;
 
@@ -914,14 +915,14 @@ pub const LAMB = struct {
         for (0..param.values.items.len) |i| {
             const m_hat = self.m.?.items[i] / (1.0 - std.math.pow(f32, self.beta1, t_f));
             const v_hat = self.v.?.items[i] / (1.0 - std.math.pow(f32, self.beta2, t_f));
-            
+
             var update = m_hat / (std.math.sqrt(v_hat) + self.epsilon);
             update = update * trust_ratio;
-            
+
             if (self.weight_decay > 0.0) {
                 update += self.weight_decay * param.values.items[i];
             }
-            
+
             param.values.items[i] -= self.lr * update;
         }
 

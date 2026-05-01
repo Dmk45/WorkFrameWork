@@ -401,7 +401,7 @@ test "section 7 trainer tracks history and checkpoint" {
     try net.add_linear(2, 1, "none");
     var opt = try lib.grad.Adam.init(allocator, 0.01, 0.9, 0.999, 1e-8);
     defer opt.deinit();
-    var trainer = lib.trainer.Trainer.init(allocator, &net, &opt, .{ .epochs = 2, .clip_grad_norm = 1.0 });
+    var trainer = try lib.trainer.Trainer.init(allocator, &net, &opt, .{ .epochs = 2, .clip_grad_norm = 1.0 });
     defer trainer.deinit();
 
     var x = try lib.maker.zeros(allocator, &[_]usize{ 2, 2 });

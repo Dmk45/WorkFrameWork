@@ -148,10 +148,10 @@ pub const CsvDataset = struct {
         const file_content = try file.readToEndAlloc(allocator, max_bytes);
         defer allocator.free(file_content);
 
-        var features = std.ArrayList(f32).empty;
-        errdefer features.deinit(allocator);
-        var labels = std.ArrayList(f32).empty;
-        errdefer labels.deinit(allocator);
+        var features = std.ArrayList(f32).init(allocator);
+        errdefer features.deinit();
+        var labels = std.ArrayList(f32).init(allocator);
+        errdefer labels.deinit();
 
         var maybe_feature_count: ?usize = null;
         var row_count: usize = 0;
@@ -163,8 +163,8 @@ pub const CsvDataset = struct {
             if (line.len == 0) continue;
             if (has_header and line_index == 0) continue;
 
-            var values = std.ArrayList(f32).empty;
-            defer values.deinit(allocator);
+            var values = std.ArrayList(f32).init(allocator);
+            defer values.deinit();
             var columns = std.mem.splitScalar(u8, line, delimiter);
             while (columns.next()) |col| {
                 const token = std.mem.trim(u8, col, " \t\r");
@@ -382,9 +382,9 @@ pub fn splitIndices(
     if (train_ratio <= 0.0 or val_ratio < 0.0) return error.InvalidSplitRatio;
     if (train_ratio + val_ratio > 1.0) return error.InvalidSplitRatio;
 
-    var shuffled = std.ArrayList(usize).empty;
-    defer shuffled.deinit(allocator);
-    try shuffled.ensureTotalCapacity(allocator, total_rows);
+    var shuffled = std.ArrayList(usize).init(allocator);
+    defer shuffled.deinit();
+    try shuffled.ensureTotalCapacity(total_rows);
     for (0..total_rows) |idx| {
         shuffled.appendAssumeCapacity(idx);
     }
