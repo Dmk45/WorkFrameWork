@@ -84,3 +84,88 @@ pub fn detach(allocator: std.mem.Allocator, tensor: *trix.DataObject) !trix.Data
     @memcpy(out.values.items, tensor.values.items);
     return out;
 }
+
+/// Gradient statistics for monitoring training
+pub const GradientStats = struct {
+    mean: f32,
+    std: f32,
+    max: f32,
+    min: f32,
+    norm: f32,
+    
+    pub fn compute(param: *trix.DataObject) ?GradientStats {
+        if (param.grad_value == null) return null;
+        
+        const grads = param.grad_value.?.items;
+        if (grads.len == 0) return null;
+        
+        var sum: f32 = 0.0;
+        var sum_sq: f32 = 0.0;
+        var max_val: f32 = -std.math.inf(f32);
+        var min_val: f32 = std.math.inf(f32);
+        
+        for (grads) |g| {
+            sum += g;
+            sum_sq += g * g;
+            if (g > max_val) max_val = g;
+            if (g < min_val) min_val = g;
+        }
+        
+        const mean = sum / @as(f32, @floatFromInt(grads.len));
+        const variance = (sum_sq / @as(f32, @floatFromInt(grads.len))) - (mean * mean);
+        const std_val = if (variance > 0.0) std.math.sqrt(variance) else 0.0;
+        const norm = std.math.sqrt(sum_sq);
+        
+        return GradientStats{
+            .mean = mean,
+            .std = std_val,
+            .max = max_val,
+            .min = min_val,
+            .norm = norm,
+        };
+    }
+};
+
+/// Graph visualization utilities
+pub const GraphVisualizer = struct {
+    pub fn exportDot(self: *Tape, writer: anytype) !void {
+        try writer.writeAll("digraph ComputationGraph {\n");
+        try writer.writeAll("  rankdir=TB;\n");
+        try writer.writeAll("  node [shape=box];\n\n");
+        
+        // Write tensor nodes
+        var tensor_iter = self.tensors.iterator();
+        while (tensor_iter.next()) |entry| {
+            const id = entry.key_ptr.*;
+            const tensor = entry.value_ptr.*;
+            const label = try std.fmt.allocPrint(self.allocator, "T{}\\nshape: {any}", .{ id, tensor.shape.? });
+            defer self.allocator.free(label);
+            try writer.print("  T{} [label=\"{}\"];\n", .{ id, label });
+        }
+        
+        try writer.writeAll("\n");
+        
+        // Write operation nodes and edges
+        for (self.ops.items) |op| {
+            const op_name = @tagName(op.op);
+            try writer.print("  O{} [label=\"{}\", shape=ellipse, style=filled, fillcolor=lightblue];\n", .{ op.output_id, op_name });
+            
+            // Edges from inputs to operation
+            for (op.input_ids.items) |input_id| {
+                try writer.print("  T{} -> O{};\n", .{ input_id, op.output_id });
+            }
+            
+            // Edge from operation to output
+            try writer.print("  O{} -> T{};\n", .{ op.output_id, op.output_id });
+        }
+        
+        try writer.writeAll("}\n");
+    }
+    
+    pub fn printSummary(self: *Tape) void {
+        std.debug.print("Computation Graph Summary:\n");
+        std.debug.print("  Tensors: {}\n", .{self.tensors.count()});
+        std.debug.print("  Operations: {}\n", .{self.ops.items.len});
+        std.debug.print("  Next ID: {}\n", .{self.next_id});
+    }
+};
