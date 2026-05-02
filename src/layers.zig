@@ -221,7 +221,7 @@ pub const Layer = union(LayerType) {
             .conv1d => |*l| l.backprop(allocator, grad_output),
             .conv2d => |*l| l.backprop(allocator, grad_output),
             .conv3d => |*l| l.backprop(allocator, grad_output),
-            .lstm => error.InvalidOperation,
+            .lstm => |*l| l.backprop(allocator, grad_output),
             .lstm_cell => |*l| l.backprop(allocator, grad_output),
             .gru_cell => |*l| l.backprop(allocator, grad_output),
         };
