@@ -159,7 +159,7 @@ pub const Trainer = struct {
         }
 
         if (self.tracker) |*t| {
-            const exp_path = try std.fmt.allocPrint(self.allocator, "{}.json", .{self.config.experiment_name.?});
+            const exp_path = try std.fmt.allocPrint(self.allocator, "{s}.json", .{self.config.experiment_name.?});
             defer self.allocator.free(exp_path);
             try t.save(exp_path);
         }

@@ -4,8 +4,8 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // VS Code passes this (sometimes broken, but we still accept it)
-    const test_filter = b.option([]const u8, "test-filter", "Filter tests");
+    // Accept -Dtest-filter from VS Code extension
+    const test_filter = b.option([]const u8, "test-filter", "Filter tests by name");
 
     const framework_module = b.addModule("modelwork2", .{
         .root_source_file = b.path("src/lib.zig"),
@@ -50,18 +50,11 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("tests/framework_tests.zig"),
         .target = target,
         .optimize = optimize,
+        .filter = test_filter, // wire the filter directly into the test step
     });
     unit_tests.root_module.addImport("modelwork2", framework_module);
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
-
-    // Pass filter to test runner
-    if (test_filter) |filter| {
-        run_unit_tests.addArgs(&[_][]const u8{
-            "--test-filter",
-            filter,
-        });
-    }
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
