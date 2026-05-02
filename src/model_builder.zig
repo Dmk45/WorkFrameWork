@@ -146,38 +146,56 @@ pub const ModelTemplates = struct {
     }
 
     fn createResNet18(allocator: std.mem.Allocator, num_classes: usize) !layers.NeuralNetwork {
-        var nn = layers.NeuralNetwork.init(allocator);
+        var nn = try layers.NeuralNetwork.init(allocator);
         // Simplified ResNet-18 structure
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 3, 64, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 64, 128, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 128, 256, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 256, 512, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 512, num_classes, "none" });
+        const l1 = try layers.LinearLayer.init(allocator, 3, 64, "relu", null, null);
+        try nn.add(l1);
+        const l2 = try layers.LinearLayer.init(allocator, 64, 128, "relu", null, null);
+        try nn.add(l2);
+        const l3 = try layers.LinearLayer.init(allocator, 128, 256, "relu", null, null);
+        try nn.add(l3);
+        const l4 = try layers.LinearLayer.init(allocator, 256, 512, "relu", null, null);
+        try nn.add(l4);
+        const l5 = try layers.LinearLayer.init(allocator, 512, num_classes, "none", null, null);
+        try nn.add(l5);
         return nn;
     }
 
     fn createResNet34(allocator: std.mem.Allocator, num_classes: usize) !layers.NeuralNetwork {
-        var nn = layers.NeuralNetwork.init(allocator);
+        var nn = try layers.NeuralNetwork.init(allocator);
         // Simplified ResNet-34 structure
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 3, 64, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 64, 128, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 128, 256, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 256, 512, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 512, 1024, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 1024, num_classes, "none" });
+        const l1 = try layers.LinearLayer.init(allocator, 3, 64, "relu", null, null);
+        try nn.add(l1);
+        const l2 = try layers.LinearLayer.init(allocator, 64, 128, "relu", null, null);
+        try nn.add(l2);
+        const l3 = try layers.LinearLayer.init(allocator, 128, 256, "relu", null, null);
+        try nn.add(l3);
+        const l4 = try layers.LinearLayer.init(allocator, 256, 512, "relu", null, null);
+        try nn.add(l4);
+        const l5 = try layers.LinearLayer.init(allocator, 512, 1024, "relu", null, null);
+        try nn.add(l5);
+        const l6 = try layers.LinearLayer.init(allocator, 1024, num_classes, "none", null, null);
+        try nn.add(l6);
         return nn;
     }
 
     fn createResNet50(allocator: std.mem.Allocator, num_classes: usize) !layers.NeuralNetwork {
-        var nn = layers.NeuralNetwork.init(allocator);
+        var nn = try layers.NeuralNetwork.init(allocator);
         // Simplified ResNet-50 structure
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 3, 64, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 64, 128, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 128, 256, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 256, 512, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 512, 1024, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 1024, 2048, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 2048, num_classes, "none" });
+        const l1 = try layers.LinearLayer.init(allocator, 3, 64, "relu", null, null);
+        try nn.add(l1);
+        const l2 = try layers.LinearLayer.init(allocator, 64, 128, "relu", null, null);
+        try nn.add(l2);
+        const l3 = try layers.LinearLayer.init(allocator, 128, 256, "relu", null, null);
+        try nn.add(l3);
+        const l4 = try layers.LinearLayer.init(allocator, 256, 512, "relu", null, null);
+        try nn.add(l4);
+        const l5 = try layers.LinearLayer.init(allocator, 512, 1024, "relu", null, null);
+        try nn.add(l5);
+        const l6 = try layers.LinearLayer.init(allocator, 1024, 2048, "relu", null, null);
+        try nn.add(l6);
+        const l7 = try layers.LinearLayer.init(allocator, 2048, num_classes, "none", null, null);
+        try nn.add(l7);
         return nn;
     }
 
@@ -194,49 +212,67 @@ pub const ModelTemplates = struct {
     }
 
     fn createVGG11(allocator: std.mem.Allocator, num_classes: usize) !layers.NeuralNetwork {
-        var nn = layers.NeuralNetwork.init(allocator);
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 3, 64, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 64, 128, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 128, 256, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 256, 512, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 512, 512, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 512, num_classes, "none" });
+        var nn = try layers.NeuralNetwork.init(allocator);
+        const layers_config = .{
+            .{ 3, 64, "relu" },
+            .{ 64, 128, "relu" },
+            .{ 128, 256, "relu" },
+            .{ 256, 512, "relu" },
+            .{ 512, 512, "relu" },
+            .{ 512, num_classes, "none" },
+        };
+        inline for (layers_config) |cfg| {
+            const layer = try layers.LinearLayer.init(allocator, cfg[0], cfg[1], cfg[2], null, null);
+            try nn.add(layer);
+        }
         return nn;
     }
 
     fn createVGG16(allocator: std.mem.Allocator, num_classes: usize) !layers.NeuralNetwork {
-        var nn = layers.NeuralNetwork.init(allocator);
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 3, 64, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 64, 64, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 64, 128, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 128, 128, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 128, 256, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 256, 256, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 256, 512, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 512, 512, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 512, num_classes, "none" });
+        var nn = try layers.NeuralNetwork.init(allocator);
+        const layers_config = .{
+            .{ 3, 64, "relu" },
+            .{ 64, 64, "relu" },
+            .{ 64, 128, "relu" },
+            .{ 128, 128, "relu" },
+            .{ 128, 256, "relu" },
+            .{ 256, 256, "relu" },
+            .{ 256, 512, "relu" },
+            .{ 512, 512, "relu" },
+            .{ 512, num_classes, "none" },
+        };
+        inline for (layers_config) |cfg| {
+            const layer = try layers.LinearLayer.init(allocator, cfg[0], cfg[1], cfg[2], null, null);
+            try nn.add(layer);
+        }
         return nn;
     }
 
     fn createVGG19(allocator: std.mem.Allocator, num_classes: usize) !layers.NeuralNetwork {
-        var nn = layers.NeuralNetwork.init(allocator);
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 3, 64, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 64, 64, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 64, 64, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 64, 64, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 64, 128, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 128, 128, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 128, 128, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 128, 128, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 128, 256, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 256, 256, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 256, 256, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 256, 256, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 256, 512, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 512, 512, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 512, 512, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 512, 512, "relu" });
-        try layers.Layer.addToNN(layers.LinearLayer, &nn, .{ 512, num_classes, "none" });
+        var nn = try layers.NeuralNetwork.init(allocator);
+        const layers_config = .{
+            .{ 3, 64, "relu" },
+            .{ 64, 64, "relu" },
+            .{ 64, 64, "relu" },
+            .{ 64, 64, "relu" },
+            .{ 64, 128, "relu" },
+            .{ 128, 128, "relu" },
+            .{ 128, 128, "relu" },
+            .{ 128, 128, "relu" },
+            .{ 128, 256, "relu" },
+            .{ 256, 256, "relu" },
+            .{ 256, 256, "relu" },
+            .{ 256, 256, "relu" },
+            .{ 256, 512, "relu" },
+            .{ 512, 512, "relu" },
+            .{ 512, 512, "relu" },
+            .{ 512, 512, "relu" },
+            .{ 512, num_classes, "none" },
+        };
+        inline for (layers_config) |cfg| {
+            const layer = try layers.LinearLayer.init(allocator, cfg[0], cfg[1], cfg[2], null, null);
+            try nn.add(layer);
+        }
         return nn;
     }
 };

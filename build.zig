@@ -4,7 +4,6 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Accept -Dtest-filter from VS Code extension
     const test_filter = b.option([]const u8, "test-filter", "Filter tests by name");
 
     const framework_module = b.addModule("modelwork2", .{
@@ -50,14 +49,24 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("tests/framework_tests.zig"),
         .target = target,
         .optimize = optimize,
-        .filter = test_filter, // wire the filter directly into the test step
+        .filters = if (test_filter) |f| &.{f} else &.{},
     });
     unit_tests.root_module.addImport("modelwork2", framework_module);
 
+    const modelrunt_tests = b.addTest(.{
+        .root_source_file = b.path("tests/Modelrunt.zig"),
+        .target = target,
+        .optimize = optimize,
+        .filters = if (test_filter) |f| &.{f} else &.{},
+    });
+    modelrunt_tests.root_module.addImport("modelwork2", framework_module);
+
     const run_unit_tests = b.addRunArtifact(unit_tests);
+    const run_modelrunt_tests = b.addRunArtifact(modelrunt_tests);
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
+    test_step.dependOn(&run_modelrunt_tests.step);
 
     // =========================
     // Docs

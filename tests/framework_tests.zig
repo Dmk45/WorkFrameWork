@@ -161,7 +161,7 @@ test "scalers fit and transform features" {
 test "section 3 core and advanced layer features" {
     const allocator = std.testing.allocator;
 
-    var conv1d = try lib.layers.Conv1DLayer.init(allocator, 1, 2, 3, 1, 1);
+    var conv1d = try lib.layers.Conv1DLayer.init(allocator, 1, 2, 3, 1, 1, null, null);
     defer conv1d.deinit();
     var x1d = try lib.maker.zeros(allocator, &[_]usize{ 2, 1, 8 });
     defer x1d.deinit();
@@ -169,7 +169,7 @@ test "section 3 core and advanced layer features" {
     defer y1d.deinit();
     try std.testing.expectEqualSlices(usize, &[_]usize{ 2, 2, 8 }, y1d.shape.?.items);
 
-    var conv2d = try lib.layers.Conv2DLayer.init(allocator, 3, 4, 3, 3, 1, 1);
+    var conv2d = try lib.layers.Conv2DLayer.init(allocator, 3, 4, 3, 3, 1, 1, null, null);
     defer conv2d.deinit();
     var x2d = try lib.maker.zeros(allocator, &[_]usize{ 2, 3, 6, 6 });
     defer x2d.deinit();
@@ -177,7 +177,7 @@ test "section 3 core and advanced layer features" {
     defer y2d.deinit();
     try std.testing.expectEqualSlices(usize, &[_]usize{ 2, 4, 6, 6 }, y2d.shape.?.items);
 
-    var conv3d = try lib.layers.Conv3DLayer.init(allocator, 2, 3, 3, 3, 3, 1, 1);
+    var conv3d = try lib.layers.Conv3DLayer.init(allocator, 2, 3, 3, 3, 3, 1, 1, null, null);
     defer conv3d.deinit();
     var x3d = try lib.maker.zeros(allocator, &[_]usize{ 1, 2, 5, 5, 5 });
     defer x3d.deinit();
@@ -215,9 +215,9 @@ test "section 3 core and advanced layer features" {
     try std.testing.expectEqual(norm_in.values.items.len, ln.values.items.len);
     try std.testing.expectEqual(norm_in.values.items.len, gn.values.items.len);
 
-    var lstm = try lib.layers.LSTMCell.init(allocator, 6, 4);
+    var lstm = try lib.layers.LSTMCell.init(allocator, 6, 4, null, null);
     defer lstm.deinit();
-    var gru = try lib.layers.GRUCell.init(allocator, 6, 4);
+    var gru = try lib.layers.GRUCell.init(allocator, 6, 4, null, null);
     defer gru.deinit();
     var x_step = try lib.maker.zeros(allocator, &[_]usize{ 2, 6 });
     defer x_step.deinit();
@@ -263,29 +263,29 @@ test "section 3 composition and introspection features" {
 
     var seq = try lib.layers.Sequential.init(allocator);
     defer seq.deinit();
-    try seq.addLinear(5, 4, "relu");
-    try seq.addLinear(4, 3, "none");
+    try seq.addLinear(5, 4, "relu", null, null);
+    try seq.addLinear(4, 3, "none", null, null);
     var seq_in = try lib.maker.zeros(allocator, &[_]usize{ 2, 5 });
     defer seq_in.deinit();
     var seq_out = try seq.forward(allocator, &seq_in);
     defer seq_out.deinit();
     try std.testing.expectEqualSlices(usize, &[_]usize{ 2, 3 }, seq_out.shape.?.items);
 
-    var branch1 = try lib.layers.LinearLayer.init(allocator, 5, 2, "relu");
+    var branch1 = try lib.layers.LinearLayer.init(allocator, 5, 2, "relu", null, null);
     defer branch1.deinit();
-    var branch2 = try lib.layers.LinearLayer.init(allocator, 5, 3, "relu");
+    var branch2 = try lib.layers.LinearLayer.init(allocator, 5, 3, "relu", null, null);
     defer branch2.deinit();
     var branched = try lib.layers.branchForward(allocator, &seq_in, &[_]*lib.layers.LinearLayer{ &branch1, &branch2 });
     defer branched.deinit();
     try std.testing.expectEqualSlices(usize, &[_]usize{ 2, 5 }, branched.shape.?.items);
 
-    var rb = try lib.layers.ResidualBlock.init(allocator, 5, 5, 5, false);
+    var rb = try lib.layers.ResidualBlock.init(allocator, 5, 5, 5, false, null, null);
     defer rb.deinit();
     var rb_out = try rb.forward(allocator, &seq_in);
     defer rb_out.deinit();
     try std.testing.expectEqualSlices(usize, &[_]usize{ 2, 5 }, rb_out.shape.?.items);
 
-    var inc = try lib.layers.InceptionModule.init(allocator, 5, 2, 2, 2, 2);
+    var inc = try lib.layers.InceptionModule.init(allocator, 5, 2, 2, 2, 2, null, null);
     defer inc.deinit();
     var inc_out = try inc.forward(allocator, &seq_in);
     defer inc_out.deinit();
@@ -295,7 +295,7 @@ test "section 3 composition and introspection features" {
     try std.testing.expectEqualStrings("LinearLayer", linear_stats.name);
     try std.testing.expect(linear_stats.parameter_count > 0);
 
-    var conv2d = try lib.layers.Conv2DLayer.init(allocator, 1, 2, 3, 3, 1, 1);
+    var conv2d = try lib.layers.Conv2DLayer.init(allocator, 1, 2, 3, 3, 1, 1, null, null);
     defer conv2d.deinit();
     const conv_stats = lib.layers.conv2dLayerStats(&conv2d);
     try std.testing.expectEqualStrings("Conv2DLayer", conv_stats.name);
@@ -398,7 +398,8 @@ test "section 7 trainer tracks history and checkpoint" {
     const allocator = std.testing.allocator;
     var net = try lib.layers.NeuralNetwork.init(allocator);
     defer net.deinit();
-    try net.add_linear(2, 1, "none");
+    const linear = try lib.layers.LinearLayer.init(allocator, 2, 1, "none", null, null);
+    try net.add(linear);
     var opt = try lib.grad.Adam.init(allocator, 0.01, 0.9, 0.999, 1e-8);
     defer opt.deinit();
     var trainer = try lib.trainer.Trainer.init(allocator, &net, &opt, .{ .epochs = 2, .clip_grad_norm = 1.0 });
