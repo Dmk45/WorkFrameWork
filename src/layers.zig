@@ -829,11 +829,14 @@ pub fn groupNorm(allocator: std.mem.Allocator, input: *trix.DataObject, groups: 
     return out;
 }
 
+/// LSTMCell forward return type
+pub const LSTMCellForwardResult = struct { h: trix.DataObject, c: trix.DataObject };
+
 /// LSTMCell forward function type
-pub const LSTMCellForwardFn = *const fn (layer: *anyopaque, allocator: std.mem.Allocator, x: *trix.DataObject, h_prev: *trix.DataObject, c_prev: *trix.DataObject) anyerror!struct { h: trix.DataObject, c: trix.DataObject };
+pub const LSTMCellForwardFn = *const fn (layer: *anyopaque, allocator: std.mem.Allocator, x: *trix.DataObject, h_prev: *trix.DataObject, c_prev: *trix.DataObject) anyerror!LSTMCellForwardResult;
 
 /// Default LSTMCell forward implementation
-fn defaultLSTMCellForward(layer_ptr: *anyopaque, allocator: std.mem.Allocator, x: *trix.DataObject, h_prev: *trix.DataObject, c_prev: *trix.DataObject) !struct { h: trix.DataObject, c: trix.DataObject } {
+fn defaultLSTMCellForward(layer_ptr: *anyopaque, allocator: std.mem.Allocator, x: *trix.DataObject, h_prev: *trix.DataObject, c_prev: *trix.DataObject) !LSTMCellForwardResult {
     const self: *LSTMCell = @ptrCast(@alignCast(layer_ptr));
     
     var x_proj = try core.matmul(allocator, x, &self.w_ih);
@@ -900,7 +903,7 @@ pub const LSTMCell = struct {
         };
     }
 
-    pub fn forward(self: *LSTMCell, allocator: std.mem.Allocator, x: *trix.DataObject, h_prev: *trix.DataObject, c_prev: *trix.DataObject) !struct { h: trix.DataObject, c: trix.DataObject } {
+    pub fn forward(self: *LSTMCell, allocator: std.mem.Allocator, x: *trix.DataObject, h_prev: *trix.DataObject, c_prev: *trix.DataObject) !LSTMCellForwardResult {
         return self.forward_fn(self, allocator, x, h_prev, c_prev);
     }
 

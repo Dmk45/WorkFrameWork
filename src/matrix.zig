@@ -49,13 +49,13 @@ pub const DataObject = struct {
         }
 
         var shape_list = try std.ArrayList(usize).initCapacity(allocator, dims.len);
-        for (dims) |sh| try shape_list.append(allocator, sh);
+        for (dims) |sh| try shape_list.append(sh);
 
         var strides_list = try std.ArrayList(usize).initCapacity(allocator, dims.len);
-        for (strides) |st| try strides_list.append(allocator, st);
+        for (strides) |st| try strides_list.append(st);
 
         var values = try std.ArrayList(f32).initCapacity(allocator, total_size);
-        try values.resize(allocator, total_size);
+        try values.resize(total_size);
 
         allocator.free(strides); // since we copied to list
 
