@@ -70,12 +70,15 @@ fn defaultLinearBackprop(layer_ptr: *anyopaque, allocator: std.mem.Allocator, gr
     }
     
     // Compute gradient w.r.t input: grad_input = grad_output @ W^T
-    var grad_input = try core.matmul(allocator, &grad, &self.weights);
+    var weights_t = try core.transpose(allocator, &self.weights);
+    defer weights_t.deinit();
+    var grad_input = try core.matmul(allocator, &grad, &weights_t);
+    errdefer grad_input.deinit();
     grad_input.enableGrad();
     
-    // Accumulate gradients for weights: d_W = input^T @ grad_output
-    // This is handled by the autodiff system
-    try grad_math.matmulBackward(&self.weights, &grad, &grad, allocator);
+    // Note: Weight gradients require the original input from forward pass.
+    // For now, this is simplified - full implementation would store/cache
+    // the input during forward pass to compute d_W = input^T @ grad_output
     
     return grad_input;
 }

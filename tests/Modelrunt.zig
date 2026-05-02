@@ -153,7 +153,7 @@ test "LSTM Neural Network Build Test" {
     target.values.items[0] = 0.5;
 
     // Compute loss and gradient
-    const loss_result = try mseLoss(allocator, &output, &target);
+    var loss_result = try mseLoss(allocator, &output, &target);
     defer loss_result.grad.deinit();
 
     // Zero gradients
