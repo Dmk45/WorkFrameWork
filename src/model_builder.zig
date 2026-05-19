@@ -61,9 +61,9 @@ pub const ModelConfig = struct {
 
         const obj = parsed.value.object;
 
-        var hidden_sizes = std.ArrayList(usize).init(allocator);
-        var activations = std.ArrayList([]const u8).init(allocator);
-        var dropout_rates = std.ArrayList(f32).init(allocator);
+        var hidden_sizes = std.array_list.Managed(usize).init(allocator);
+        var activations = std.array_list.Managed([]const u8).init(allocator);
+        var dropout_rates = std.array_list.Managed(f32).init(allocator);
 
         if (obj.get("hidden_sizes")) |hs_array| {
             for (hs_array.array.items) |hs| {
@@ -105,20 +105,20 @@ pub const ModelConfig = struct {
         try obj.put("use_batch_norm", std.json.Value{ .bool = self.use_batch_norm });
         try obj.put("use_layer_norm", std.json.Value{ .bool = self.use_layer_norm });
 
-        var hidden_sizes_array = std.ArrayList(std.json.Value).init(allocator);
+        var hidden_sizes_array = std.array_list.Managed(std.json.Value).init(allocator);
         for (self.hidden_sizes) |hs| {
             try hidden_sizes_array.append(std.json.Value{ .integer = @intCast(hs) });
         }
         try obj.put("hidden_sizes", std.json.Value{ .array = hidden_sizes_array.toOwnedSlice() });
 
-        var activations_array = std.ArrayList(std.json.Value).init(allocator);
+        var activations_array = std.array_list.Managed(std.json.Value).init(allocator);
         for (self.activations) |act| {
             try activations_array.append(std.json.Value{ .string = act });
         }
         try obj.put("activations", std.json.Value{ .array = activations_array.toOwnedSlice() });
 
         if (self.dropout_rates) |dr| {
-            var dr_array = std.ArrayList(std.json.Value).init(allocator);
+            var dr_array = std.array_list.Managed(std.json.Value).init(allocator);
             for (dr) |rate| {
                 try dr_array.append(std.json.Value{ .float = rate });
             }

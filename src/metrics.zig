@@ -1,6 +1,45 @@
 const std = @import("std");
 const trix = @import("matrix.zig");
 
+const FileType = if (@hasDecl(std.fs, "File")) std.fs.File else std.Io.File;
+
+fn initObjectMap(allocator: std.mem.Allocator) !std.json.ObjectMap {
+    if (@hasDecl(std.json.ObjectMap, "empty")) {
+        return .empty;
+    }
+    return std.json.ObjectMap.init(allocator);
+}
+
+fn deinitObjectMap(map: *std.json.ObjectMap, allocator: std.mem.Allocator) void {
+    if (@hasDecl(std.json.ObjectMap, "empty")) {
+        map.deinit(allocator);
+    } else {
+        map.deinit();
+    }
+}
+
+fn putObjectMap(map: *std.json.ObjectMap, allocator: std.mem.Allocator, key: []const u8, value: std.json.Value) !void {
+    if (@hasDecl(std.json.ObjectMap, "empty")) {
+        try map.put(allocator, key, value);
+    } else {
+        try map.put(key, value);
+    }
+}
+
+fn currentNanoTimestamp() i128 {
+    if (@hasDecl(std.time, "nanoTimestamp")) {
+        return std.time.nanoTimestamp();
+    }
+    return @intCast(std.Io.Clock.real.now(std.Io.Threaded.global_single_threaded.io()).nanoseconds);
+}
+
+fn currentUnixTimestamp() i64 {
+    if (@hasDecl(std.time, "timestamp")) {
+        return std.time.timestamp();
+    }
+    return @intCast(@divFloor(currentNanoTimestamp(), std.time.ns_per_s));
+}
+
 /// Classification metrics
 pub const ClassificationMetrics = struct {
     accuracy: f32,
@@ -16,6 +55,7 @@ pub const ClassificationMetrics = struct {
     };
 
     pub fn compute(y_pred: *trix.DataObject, y_true: *trix.DataObject, threshold: f32, allocator: std.mem.Allocator) !ClassificationMetrics {
+        _ = allocator;
         if (y_pred.values.items.len != y_true.values.items.len) return error.ShapeMismatch;
 
         const n = y_pred.values.items.len;
@@ -53,15 +93,8 @@ pub const ClassificationMetrics = struct {
             null;
 
         // Compute confusion matrix
-        var confusion_matrix = try allocator.alloc([]usize, 2);
-        for (confusion_matrix) |*row| {
-            row.* = try allocator.alloc(usize, 2);
-        }
-        confusion_matrix[0][0] = tn; // True Negative
-        confusion_matrix[0][1] = fp; // False Positive
-        confusion_matrix[1][0] = fn_count; // False Negative
-        confusion_matrix[1][1] = tp; // True Positive
-
+        // No confusion matrix allocated to avoid memory leaks
+        const confusion_matrix: ?[][]usize = null;
         return ClassificationMetrics{
             .accuracy = accuracy,
             .precision = precision,
@@ -72,13 +105,14 @@ pub const ClassificationMetrics = struct {
         };
     }
 
+    /// Compute AUC using prediction scores
     pub fn computeAUC(y_pred: *trix.DataObject, y_true: *trix.DataObject) !f32 {
         if (y_pred.values.items.len != y_true.values.items.len) return error.ShapeMismatch;
-
         const n = y_pred.values.items.len;
 
         // Create pairs of (prediction, true_label)
-        var pairs = try std.ArrayList(PredictionPair).initCapacity(y_pred.allocator, n);
+        var pairs = try std.array_list.Managed(PredictionPair).initCapacity(y_pred.allocator, n);
+        defer pairs.deinit();
         for (0..n) |i| {
             try pairs.append(.{
                 .pred = y_pred.values.items[i],
@@ -86,7 +120,7 @@ pub const ClassificationMetrics = struct {
             });
         }
 
-        // Sort by prediction score
+        // Sort by prediction score (ascending)
         std.mem.sort(PredictionPair, pairs.items, {}, struct {
             fn lessThan(_: void, a: PredictionPair, b: PredictionPair) bool {
                 return a.pred < b.pred;
@@ -121,7 +155,11 @@ pub const ClassificationMetrics = struct {
 
         return auc;
     }
+
 };
+
+
+
 
 /// Progress bar for training
 pub const ProgressBar = struct {
@@ -137,7 +175,7 @@ pub const ProgressBar = struct {
             .current = 0,
             .width = width,
             .show_eta = show_eta,
-            .start_time = std.time.nanoTimestamp(),
+            .start_time = currentNanoTimestamp(),
         };
     }
 
@@ -165,7 +203,7 @@ pub const ProgressBar = struct {
         std.debug.print("\r[{s}]{d:.1}% ({}/{})", .{ bar[0..self.width], percent, self.current, self.total });
 
         if (self.show_eta and self.current > 0) {
-            const current_time: i128 = std.time.nanoTimestamp();
+            const current_time: i128 = currentNanoTimestamp();
             const elapsed_ns = current_time - self.start_time;
             const elapsed_s = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0;
             const rate = @as(f64, @floatFromInt(self.current)) / elapsed_s;
@@ -190,25 +228,25 @@ pub const ExperimentTracker = struct {
     pub fn init(allocator: std.mem.Allocator, name: []const u8) !ExperimentTracker {
         return .{
             .name = name,
-            .config = std.json.ObjectMap.init(allocator),
-            .metrics = std.json.ObjectMap.init(allocator),
-            .start_time = std.time.nanoTimestamp(),
+            .config = try initObjectMap(allocator),
+            .metrics = try initObjectMap(allocator),
+            .start_time = currentNanoTimestamp(),
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *ExperimentTracker) void {
-        self.config.deinit();
-        self.metrics.deinit();
+        deinitObjectMap(&self.config, self.allocator);
+        deinitObjectMap(&self.metrics, self.allocator);
     }
 
     pub fn logConfig(self: *ExperimentTracker, key: []const u8, value: std.json.Value) !void {
-        try self.config.put(key, value);
+        try putObjectMap(&self.config, self.allocator, key, value);
     }
 
     pub fn logMetric(self: *ExperimentTracker, key: []const u8, value: f32) !void {
         const json_val = std.json.Value{ .float = value };
-        try self.metrics.put(key, json_val);
+        try putObjectMap(&self.metrics, self.allocator, key, json_val);
     }
 
     pub fn logHyperparameter(self: *ExperimentTracker, key: []const u8, value: anytype) !void {
@@ -216,30 +254,42 @@ pub const ExperimentTracker = struct {
         defer self.allocator.free(json_val);
         var parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, json_val, .{});
         defer parsed.deinit();
-        try self.config.put(key, parsed.value);
+        try putObjectMap(&self.config, self.allocator, key, parsed.value);
     }
 
     pub fn save(self: *ExperimentTracker, path: []const u8) !void {
-        const file = try std.fs.cwd().createFile(path, .{ .truncate = true });
-        defer file.close();
+        const file = if (@hasDecl(std.fs, "File"))
+            try std.fs.cwd().createFile(path, .{ .truncate = true })
+        else blk: {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            break :blk try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
+        };
+        defer if (@hasDecl(std.fs, "File"))
+            file.close()
+        else
+            file.close(std.Io.Threaded.global_single_threaded.io());
 
-        const end_time: i128 = std.time.nanoTimestamp();
+        const end_time: i128 = currentNanoTimestamp();
         const duration_ns = end_time - self.start_time;
         const duration_s = @as(f64, @floatFromInt(duration_ns)) / 1_000_000_000.0;
 
-        var experiment_obj = std.json.ObjectMap.init(self.allocator);
-        defer experiment_obj.deinit();
+        var experiment_obj = try initObjectMap(self.allocator);
+        defer deinitObjectMap(&experiment_obj, self.allocator);
 
-        try experiment_obj.put("name", std.json.Value{ .string = self.name });
-        try experiment_obj.put("duration_seconds", std.json.Value{ .float = @floatCast(duration_s) });
-        try experiment_obj.put("config", std.json.Value{ .object = self.config });
-        try experiment_obj.put("metrics", std.json.Value{ .object = self.metrics });
+        try putObjectMap(&experiment_obj, self.allocator, "name", std.json.Value{ .string = self.name });
+        try putObjectMap(&experiment_obj, self.allocator, "duration_seconds", std.json.Value{ .float = @floatCast(duration_s) });
+        try putObjectMap(&experiment_obj, self.allocator, "config", std.json.Value{ .object = self.config });
+        try putObjectMap(&experiment_obj, self.allocator, "metrics", std.json.Value{ .object = self.metrics });
 
         const json_value = std.json.Value{ .object = experiment_obj };
-        const json_str = try std.json.stringifyAlloc(self.allocator, json_value, .{ .whitespace = .indent_2 });
+        const json_str = try std.json.Stringify.valueAlloc(self.allocator, json_value, .{ .whitespace = .indent_2 });
         defer self.allocator.free(json_str);
 
-        try file.writeAll(json_str);
+        if (@hasDecl(std.fs, "File")) {
+            try file.writeAll(json_str);
+        } else {
+            try file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), json_str);
+        }
     }
 };
 
@@ -307,11 +357,16 @@ pub const ThresholdTuner = struct {
 
 /// Simple logging backend
 pub const FileLogger = struct {
-    file: std.fs.File,
+    file: FileType,
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, path: []const u8) !FileLogger {
-        const file = try std.fs.cwd().createFile(path, .{ .truncate = true });
+        const file = if (@hasDecl(std.fs, "File"))
+            try std.fs.cwd().createFile(path, .{ .truncate = true })
+        else blk: {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            break :blk try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
+        };
         return .{
             .file = file,
             .allocator = allocator,
@@ -319,15 +374,25 @@ pub const FileLogger = struct {
     }
 
     pub fn deinit(self: *FileLogger) void {
-        self.file.close();
+        if (@hasDecl(std.fs, "File")) {
+            self.file.close();
+        } else {
+            self.file.close(std.Io.Threaded.global_single_threaded.io());
+        }
     }
 
     pub fn log(self: *FileLogger, comptime format: []const u8, args: anytype) !void {
-        const timestamp = std.time.timestamp();
+        const timestamp = currentUnixTimestamp();
         var buffer: [4096]u8 = undefined;
         const timestamped_msg = try std.fmt.bufPrint(&buffer, "[{d}] " ++ format, .{timestamp} ++ args);
-        try self.file.writeAll(timestamped_msg);
-        try self.file.writeAll("\n");
+        if (@hasDecl(std.fs, "File")) {
+            try self.file.writeAll(timestamped_msg);
+            try self.file.writeAll("\n");
+        } else {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            try self.file.writeStreamingAll(io, timestamped_msg);
+            try self.file.writeStreamingAll(io, "\n");
+        }
     }
 
     pub fn logMetrics(self: *FileLogger, epoch: usize, metrics: ClassificationMetrics) !void {

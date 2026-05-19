@@ -5,6 +5,13 @@ const grad_mod = @import("grad.zig");
 const grad_math = @import("grad_math.zig");
 const matlab_mod = @import("matlab.zig");
 
+fn currentNanoTimestamp() i128 {
+    if (@hasDecl(std.time, "nanoTimestamp")) {
+        return std.time.nanoTimestamp();
+    }
+    return @intCast(std.Io.Clock.real.now(std.Io.Threaded.global_single_threaded.io()).nanoseconds);
+}
+
 /// Forward function type for layers - can be customized per layer instance
 pub const ForwardFn = *const fn (layer: *anyopaque, allocator: std.mem.Allocator, input: *trix.DataObject) anyerror!trix.DataObject;
 
@@ -103,7 +110,7 @@ pub const LinearLayer = struct {
         var bias = try trix.DataObject.init(allocator, &[_]usize{output_size}, .f32);
 
         // Initialize with small random values
-        const nano_ts = std.time.nanoTimestamp();
+        const nano_ts = currentNanoTimestamp();
         const u64_ts: u64 = @intCast(@mod(nano_ts, std.math.maxInt(i64)));
         var prng = std.Random.DefaultPrng.init(u64_ts);
         var random = prng.random();
@@ -255,10 +262,10 @@ pub const Layer = union(LayerType) {
 /// Simple neural network container with generic layer support
 pub const NeuralNetwork = struct {
     allocator: std.mem.Allocator,
-    layers: std.ArrayList(Layer),
+    layers: std.array_list.Managed(Layer),
 
     pub fn init(allocator: std.mem.Allocator) !NeuralNetwork {
-        const layers = try std.ArrayList(Layer).initCapacity(allocator, 10);
+        const layers = try std.array_list.Managed(Layer).initCapacity(allocator, 10);
         return NeuralNetwork{
             .allocator = allocator,
             .layers = layers,
@@ -267,6 +274,8 @@ pub const NeuralNetwork = struct {
 
     /// Generic add method - accepts any layer type
     pub fn add(self: *NeuralNetwork, layer: anytype) !void {
+        // TODO: check isinstance(layer) else raise typer error
+        // check self.layers.append(Layer{layer.type});
         const LayerStruct = @TypeOf(layer);
         
         // Determine which union variant to use based on type
@@ -1025,8 +1034,8 @@ fn defaultLSTMForwardSequence(layer_ptr: *anyopaque, allocator: std.mem.Allocato
     const batch = sequence[0].shape.?.items[0];
 
     // Initialize hidden and cell states to zeros
-    var h_states = try std.ArrayList(trix.DataObject).initCapacity(allocator, self.num_layers);
-    var c_states = try std.ArrayList(trix.DataObject).initCapacity(allocator, self.num_layers);
+    var h_states = try std.array_list.Managed(trix.DataObject).initCapacity(allocator, self.num_layers);
+    var c_states = try std.array_list.Managed(trix.DataObject).initCapacity(allocator, self.num_layers);
     defer h_states.deinit();
     defer c_states.deinit();
 
@@ -1041,8 +1050,8 @@ fn defaultLSTMForwardSequence(layer_ptr: *anyopaque, allocator: std.mem.Allocato
     }
 
     // Convert to pointers for the forward pass
-    var h_ptrs = try std.ArrayList(*trix.DataObject).initCapacity(allocator, self.num_layers);
-    var c_ptrs = try std.ArrayList(*trix.DataObject).initCapacity(allocator, self.num_layers);
+    var h_ptrs = try std.array_list.Managed(*trix.DataObject).initCapacity(allocator, self.num_layers);
+    var c_ptrs = try std.array_list.Managed(*trix.DataObject).initCapacity(allocator, self.num_layers);
     defer h_ptrs.deinit();
     defer c_ptrs.deinit();
 
@@ -1098,11 +1107,11 @@ pub const LSTMLayer = struct {
     num_layers: usize,
     input_size: usize,
     hidden_size: usize,
-    cells: std.ArrayList(LSTMCell),
+    cells: std.array_list.Managed(LSTMCell),
     forward_sequence_fn: LSTMForwardSequenceFn,
 
     pub fn init(allocator: std.mem.Allocator, num_layers: usize, input_size: usize, hidden_size: usize, forward_sequence_fn: ?LSTMForwardSequenceFn) !LSTMLayer {
-        var cells = try std.ArrayList(LSTMCell).initCapacity(allocator, num_layers);
+        var cells = try std.array_list.Managed(LSTMCell).initCapacity(allocator, num_layers);
 
         // First layer takes input_size, subsequent layers take hidden_size
         for (0..num_layers) |i| {
@@ -1123,19 +1132,19 @@ pub const LSTMLayer = struct {
 
     /// Forward pass through all LSTM layers for one timestep
     /// Returns final hidden state and cell state
-    pub fn forward(self: *LSTMLayer, allocator: std.mem.Allocator, x: *trix.DataObject, h_prev: ?[]*trix.DataObject, c_prev: ?[]*trix.DataObject) !struct { h: trix.DataObject, c: trix.DataObject, h_states: std.ArrayList(trix.DataObject), c_states: std.ArrayList(trix.DataObject) } {
+    pub fn forward(self: *LSTMLayer, allocator: std.mem.Allocator, x: *trix.DataObject, h_prev: ?[]*trix.DataObject, c_prev: ?[]*trix.DataObject) !struct { h: trix.DataObject, c: trix.DataObject, h_states: std.array_list.Managed(trix.DataObject), c_states: std.array_list.Managed(trix.DataObject) } {
         const batch = x.shape.?.items[0];
 
         // Initialize or use provided hidden/cell states
-        var h_states = try std.ArrayList(trix.DataObject).initCapacity(allocator, self.num_layers);
-        var c_states = try std.ArrayList(trix.DataObject).initCapacity(allocator, self.num_layers);
+        var h_states = try std.array_list.Managed(trix.DataObject).initCapacity(allocator, self.num_layers);
+        var c_states = try std.array_list.Managed(trix.DataObject).initCapacity(allocator, self.num_layers);
 
         var current_input = x;
         var prev_h: *trix.DataObject = undefined;
         var prev_c: *trix.DataObject = undefined;
 
         // Temporary storage for intermediate results that need cleanup
-        var temp_inputs = std.ArrayList(trix.DataObject).init(allocator);
+        var temp_inputs = std.array_list.Managed(trix.DataObject).init(allocator);
         defer temp_inputs.deinit();
 
         for (0..self.num_layers) |layer| {
@@ -1322,14 +1331,14 @@ pub fn denseSkipConcat(allocator: std.mem.Allocator, tensors: []const *trix.Data
 
 pub const Sequential = struct {
     allocator: std.mem.Allocator,
-    layers: std.ArrayList(LinearLayer),
+    layers: std.array_list.Managed(Layer),
 
     pub fn init(allocator: std.mem.Allocator) !Sequential {
-        return .{ .allocator = allocator, .layers = try std.ArrayList(LinearLayer).initCapacity(allocator, 8) };
+        return .{ .allocator = allocator, .layers = try std.array_list.Managed(Layer).initCapacity(allocator, 8) };
     }
 
     pub fn addLinear(self: *Sequential, input_size: usize, output_size: usize, activation: []const u8, forward_fn: ?ForwardFn, backprop_fn: ?BackpropFn) !void {
-        try self.layers.append(try LinearLayer.init(self.allocator, input_size, output_size, activation, forward_fn, backprop_fn));
+        try self.layers.append(Layer{ .linear = try LinearLayer.init(self.allocator, input_size, output_size, activation, forward_fn, backprop_fn) });
     }
 
     pub fn forward(self: *Sequential, allocator: std.mem.Allocator, input: *trix.DataObject) !trix.DataObject {

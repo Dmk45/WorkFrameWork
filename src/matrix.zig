@@ -28,11 +28,11 @@ pub fn shape(comptime T: type) [getRank(T)]usize {
 
 pub const DataObject = struct {
     allocator: std.mem.Allocator,
-    values: std.ArrayList(f32),
-    shape: ?std.ArrayList(usize) = null,
-    strides: ?std.ArrayList(usize) = null,
+    values: std.array_list.Managed(f32),
+    shape: ?std.array_list.Managed(usize) = null,
+    strides: ?std.array_list.Managed(usize) = null,
     dtype: DType,
-    grad_value: ?std.ArrayList(f32) = null,
+    grad_value: ?std.array_list.Managed(f32) = null,
     attributes: ?std.StringHashMap(f32) = null,
     grad: bool = false,
 
@@ -48,13 +48,13 @@ pub const DataObject = struct {
             total_size *= dims[i];
         }
 
-        var shape_list = try std.ArrayList(usize).initCapacity(allocator, dims.len);
+        var shape_list = try std.array_list.Managed(usize).initCapacity(allocator, dims.len);
         for (dims) |sh| try shape_list.append(sh);
 
-        var strides_list = try std.ArrayList(usize).initCapacity(allocator, dims.len);
+        var strides_list = try std.array_list.Managed(usize).initCapacity(allocator, dims.len);
         for (strides) |st| try strides_list.append(st);
 
-        var values = try std.ArrayList(f32).initCapacity(allocator, total_size);
+        var values = try std.array_list.Managed(f32).initCapacity(allocator, total_size);
         try values.resize(total_size);
 
         allocator.free(strides); // since we copied to list
@@ -116,7 +116,7 @@ pub const DataObject = struct {
 
     fn ensureShape(self: *DataObject) !void {
         if (self.shape == null) {
-            self.shape = try std.ArrayList(usize).initCapacity(self.allocator, 4);
+            self.shape = try std.array_list.Managed(usize).initCapacity(self.allocator, 4);
         }
     }
 
@@ -131,7 +131,7 @@ pub const DataObject = struct {
 
     pub fn ensureGradValue(self: *DataObject) !void {
         if (self.grad_value == null) {
-            self.grad_value = try std.ArrayList(f32).initCapacity(self.allocator, self.values.items.len);
+            self.grad_value = try std.array_list.Managed(f32).initCapacity(self.allocator, self.values.items.len);
             try self.grad_value.?.resize(self.values.items.len);
             @memset(self.grad_value.?.items, 0.0);
         }

@@ -4,7 +4,7 @@ const grad_math = @import("grad_math.zig");
 
 pub const OpRecord = struct {
     op: grad_math.OperationType,
-    input_ids: std.ArrayList(usize),
+    input_ids: std.array_list.Managed(usize),
     output_id: usize,
     metadata: grad_math.OperationMetadata,
 };
@@ -12,14 +12,14 @@ pub const OpRecord = struct {
 pub const Tape = struct {
     allocator: std.mem.Allocator,
     tensors: std.AutoHashMap(usize, *trix.DataObject),
-    ops: std.ArrayList(OpRecord),
+    ops: std.array_list.Managed(OpRecord),
     next_id: usize,
 
     pub fn init(allocator: std.mem.Allocator) Tape {
         return .{
             .allocator = allocator,
             .tensors = std.AutoHashMap(usize, *trix.DataObject).init(allocator),
-            .ops = std.ArrayList(OpRecord).init(allocator),
+            .ops = std.array_list.Managed(OpRecord).init(allocator),
             .next_id = 1,
         };
     }
@@ -46,7 +46,8 @@ pub const Tape = struct {
         output_id: usize,
         metadata: grad_math.OperationMetadata,
     ) !void {
-        var ids = try std.ArrayList(usize).initCapacity(self.allocator, input_ids.len);
+        var ids = std.array_list.Managed(usize).init(self.allocator);
+        try ids.ensureTotalCapacity(input_ids.len);
         for (input_ids) |id| try ids.append(id);
         try self.ops.append(.{
             .op = op,

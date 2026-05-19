@@ -100,8 +100,8 @@ pub const Adam = struct {
     beta2: f32,
     epsilon: f32,
     t: usize,
-    m: ?std.ArrayList(f32),
-    v: ?std.ArrayList(f32),
+    m: ?std.array_list.Managed(f32),
+    v: ?std.array_list.Managed(f32),
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, lr: f32, beta1: f32, beta2: f32, epsilon: f32) !Adam {
@@ -129,12 +129,12 @@ pub const Adam = struct {
 
         // Initialize m and v if not done
         if (self.m == null) {
-            self.m = try std.ArrayList(f32).initCapacity(self.allocator, param.values.items.len);
+            self.m = try std.array_list.Managed(f32).initCapacity(self.allocator, param.values.items.len);
             try self.m.?.resize(param.values.items.len);
             @memset(self.m.?.items, 0.0);
         }
         if (self.v == null) {
-            self.v = try std.ArrayList(f32).initCapacity(self.allocator, param.values.items.len);
+            self.v = try std.array_list.Managed(f32).initCapacity(self.allocator, param.values.items.len);
             try self.v.?.resize(param.values.items.len);
             @memset(self.v.?.items, 0.0);
         }
@@ -171,7 +171,7 @@ pub const SGD = struct {
     momentum: f32,
     nesterov: bool,
     weight_decay: f32,
-    velocity: ?std.ArrayList(f32),
+    velocity: ?std.array_list.Managed(f32),
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, lr: f32, momentum: f32, nesterov: bool, weight_decay: f32) SGD {
@@ -192,7 +192,7 @@ pub const SGD = struct {
     pub fn step(self: *SGD, param: *trix.DataObject) !void {
         if (param.grad_value == null) return;
         if (self.velocity == null) {
-            self.velocity = try std.ArrayList(f32).initCapacity(self.allocator, param.values.items.len);
+            self.velocity = try std.array_list.Managed(f32).initCapacity(self.allocator, param.values.items.len);
             try self.velocity.?.resize(param.values.items.len);
             @memset(self.velocity.?.items, 0.0);
         }
@@ -214,7 +214,7 @@ pub const RMSprop = struct {
     alpha: f32,
     epsilon: f32,
     weight_decay: f32,
-    square_avg: ?std.ArrayList(f32),
+    square_avg: ?std.array_list.Managed(f32),
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, lr: f32, alpha: f32, epsilon: f32, weight_decay: f32) RMSprop {
@@ -235,7 +235,7 @@ pub const RMSprop = struct {
     pub fn step(self: *RMSprop, param: *trix.DataObject) !void {
         if (param.grad_value == null) return;
         if (self.square_avg == null) {
-            self.square_avg = try std.ArrayList(f32).initCapacity(self.allocator, param.values.items.len);
+            self.square_avg = try std.array_list.Managed(f32).initCapacity(self.allocator, param.values.items.len);
             try self.square_avg.?.resize(param.values.items.len);
             @memset(self.square_avg.?.items, 0.0);
         }
@@ -254,7 +254,7 @@ pub const AdaGrad = struct {
     lr: f32,
     epsilon: f32,
     weight_decay: f32,
-    sum_sq: ?std.ArrayList(f32),
+    sum_sq: ?std.array_list.Managed(f32),
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, lr: f32, epsilon: f32, weight_decay: f32) AdaGrad {
@@ -274,7 +274,7 @@ pub const AdaGrad = struct {
     pub fn step(self: *AdaGrad, param: *trix.DataObject) !void {
         if (param.grad_value == null) return;
         if (self.sum_sq == null) {
-            self.sum_sq = try std.ArrayList(f32).initCapacity(self.allocator, param.values.items.len);
+            self.sum_sq = try std.array_list.Managed(f32).initCapacity(self.allocator, param.values.items.len);
             try self.sum_sq.?.resize(param.values.items.len);
             @memset(self.sum_sq.?.items, 0.0);
         }
@@ -780,8 +780,8 @@ pub const AdaBound = struct {
     final_lr: f32,
     gamma: f32,
     t: usize,
-    m: ?std.ArrayList(f32),
-    v: ?std.ArrayList(f32),
+    m: ?std.array_list.Managed(f32),
+    v: ?std.array_list.Managed(f32),
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, lr: f32, beta1: f32, beta2: f32, epsilon: f32, final_lr: f32, gamma: f32) !AdaBound {
@@ -810,12 +810,12 @@ pub const AdaBound = struct {
         self.t += 1;
 
         if (self.m == null) {
-            self.m = try std.ArrayList(f32).initCapacity(self.allocator, param.values.items.len);
+            self.m = try std.array_list.Managed(f32).initCapacity(self.allocator, param.values.items.len);
             try self.m.?.resize(param.values.items.len);
             @memset(self.m.?.items, 0.0);
         }
         if (self.v == null) {
-            self.v = try std.ArrayList(f32).initCapacity(self.allocator, param.values.items.len);
+            self.v = try std.array_list.Managed(f32).initCapacity(self.allocator, param.values.items.len);
             try self.v.?.resize(param.values.items.len);
             @memset(self.v.?.items, 0.0);
         }
@@ -850,8 +850,8 @@ pub const LAMB = struct {
     epsilon: f32,
     weight_decay: f32,
     t: usize,
-    m: ?std.ArrayList(f32),
-    v: ?std.ArrayList(f32),
+    m: ?std.array_list.Managed(f32),
+    v: ?std.array_list.Managed(f32),
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, lr: f32, beta1: f32, beta2: f32, epsilon: f32, weight_decay: f32) !LAMB {
@@ -879,12 +879,12 @@ pub const LAMB = struct {
         self.t += 1;
 
         if (self.m == null) {
-            self.m = try std.ArrayList(f32).initCapacity(self.allocator, param.values.items.len);
+            self.m = try std.array_list.Managed(f32).initCapacity(self.allocator, param.values.items.len);
             try self.m.?.resize(param.values.items.len);
             @memset(self.m.?.items, 0.0);
         }
         if (self.v == null) {
-            self.v = try std.ArrayList(f32).initCapacity(self.allocator, param.values.items.len);
+            self.v = try std.array_list.Managed(f32).initCapacity(self.allocator, param.values.items.len);
             try self.v.?.resize(param.values.items.len);
             @memset(self.v.?.items, 0.0);
         }
@@ -937,7 +937,7 @@ pub const LARS = struct {
     weight_decay: f32,
     trust_coef: f32,
     epsilon: f32,
-    velocity: ?std.ArrayList(f32),
+    velocity: ?std.array_list.Managed(f32),
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, lr: f32, momentum: f32, weight_decay: f32, trust_coef: f32, epsilon: f32) LARS {
@@ -960,7 +960,7 @@ pub const LARS = struct {
         if (param.grad_value == null) return;
 
         if (self.velocity == null) {
-            self.velocity = try std.ArrayList(f32).initCapacity(self.allocator, param.values.items.len);
+            self.velocity = try std.array_list.Managed(f32).initCapacity(self.allocator, param.values.items.len);
             try self.velocity.?.resize(param.values.items.len);
             @memset(self.velocity.?.items, 0.0);
         }

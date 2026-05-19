@@ -4,6 +4,13 @@ const layers = @import("layers.zig");
 const grad = @import("grad.zig");
 const metrics = @import("metrics.zig");
 
+fn currentNanoTimestamp() i128 {
+    if (@hasDecl(std.time, "nanoTimestamp")) {
+        return std.time.nanoTimestamp();
+    }
+    return @intCast(std.Io.Clock.real.now(std.Io.Threaded.global_single_threaded.io()).nanoseconds);
+}
+
 pub const EpochStats = struct {
     train_loss: f32,
     val_loss: f32,
@@ -14,10 +21,10 @@ pub const EpochStats = struct {
 
 pub const TrainingHistory = struct {
     allocator: std.mem.Allocator,
-    epochs: std.ArrayList(EpochStats),
+    epochs: std.array_list.Managed(EpochStats),
 
     pub fn init(allocator: std.mem.Allocator) TrainingHistory {
-        return .{ .allocator = allocator, .epochs = std.ArrayList(EpochStats).init(allocator) };
+        return .{ .allocator = allocator, .epochs = std.array_list.Managed(EpochStats).init(allocator) };
     }
 
     pub fn deinit(self: *TrainingHistory) void {
@@ -83,8 +90,25 @@ pub const Trainer = struct {
         const loss = try grad.meanSquaredError(&pred, y);
         if (self.config.clip_grad_norm) |max_norm| {
             for (self.model.layers.items) |*layer| {
-                grad.clipGradientsByNorm(&layer.weights, max_norm);
-                grad.clipGradientsByNorm(&layer.bias, max_norm);
+                switch(layer.*) {
+                    .linear => |*l| {
+                        grad.clipGradientsByNorm(&l.weights, max_norm);
+                        grad.clipGradientsByNorm(&l.bias, max_norm);
+                    },
+                    .conv1d => |*l| {
+                        grad.clipGradientsByNorm(&l.weights, max_norm);
+                        grad.clipGradientsByNorm(&l.bias, max_norm);
+                    },
+                    .conv2d => |*l| {
+                        grad.clipGradientsByNorm(&l.weights, max_norm);
+                        grad.clipGradientsByNorm(&l.bias, max_norm);
+                    },
+                    .conv3d => |*l| {
+                        grad.clipGradientsByNorm(&l.weights, max_norm);
+                        grad.clipGradientsByNorm(&l.bias, max_norm);
+                    },
+                    else => {},
+                }
             }
         }
         try self.model.update_parameters(self.optimizer);
@@ -114,14 +138,14 @@ pub const Trainer = struct {
         }
 
         for (0..self.config.epochs) |epoch| {
-            const epoch_start_time = std.time.nanoTimestamp();
+            const epoch_start_time = currentNanoTimestamp();
 
             const train_loss = try self.trainEpoch(train_x, train_y);
             const val_result = try self.evaluate(val_x, val_y);
 
             if (val_result.loss < self.best_val_loss) self.best_val_loss = val_result.loss;
 
-            const epoch_end_time = std.time.nanoTimestamp();
+            const epoch_end_time = currentNanoTimestamp();
             const epoch_time = @as(f64, @floatFromInt(epoch_end_time - epoch_start_time)) / 1_000_000_000.0;
 
             try self.history.epochs.append(.{ .train_loss = train_loss, .val_loss = val_result.loss, .metrics = val_result.metrics, .learning_rate = self.optimizer.lr, .epoch_time = epoch_time });
@@ -166,10 +190,22 @@ pub const Trainer = struct {
     }
 
     pub fn saveCheckpoint(self: *Trainer, path: []const u8) !void {
-        var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
-        defer file.close();
+        const file = if (@hasDecl(std.fs, "File"))
+            try std.fs.cwd().createFile(path, .{ .truncate = true })
+        else blk: {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            break :blk try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
+        };
+        defer if (@hasDecl(std.fs, "File"))
+            file.close()
+        else
+            file.close(std.Io.Threaded.global_single_threaded.io());
         const payload = try std.fmt.allocPrint(self.allocator, "best_val_loss={d}\nnum_layers={}\n", .{ self.best_val_loss, self.model.layers.items.len });
         defer self.allocator.free(payload);
-        try file.writeAll(payload);
+        if (@hasDecl(std.fs, "File")) {
+            try file.writeAll(payload);
+        } else {
+            try file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), payload);
+        }
     }
 };

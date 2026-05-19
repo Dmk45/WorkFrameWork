@@ -1,5 +1,22 @@
 const std = @import("std");
 
+fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    if (@hasDecl(std.fs, "File")) {
+        const file = try std.fs.cwd().openFile(path, .{});
+        defer file.close();
+        return try file.readToEndAlloc(allocator, std.math.maxInt(usize));
+    }
+
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    const len: usize = @intCast(try file.length(io));
+    const content = try allocator.alloc(u8, len);
+    errdefer allocator.free(content);
+    const read = try file.readPositionalAll(io, content, 0);
+    return content[0..read];
+}
+
 pub const DatasetVTable = struct {
     row_count: *const fn (ctx: *const anyopaque) usize,
     feature_count: *const fn (ctx: *const anyopaque) usize,
@@ -30,8 +47,8 @@ pub const Dataset = struct {
 
 pub const CsvDataset = struct {
     allocator: std.mem.Allocator,
-    features: std.ArrayList(f32),
-    labels: std.ArrayList(f32),
+    features: std.array_list.Managed(f32),
+    labels: std.array_list.Managed(f32),
     feature_count: usize,
     row_count: usize,
 
@@ -59,11 +76,11 @@ pub const CsvDataset = struct {
         const feature_count = @as(usize, feature_count_u32);
         if (row_count == 0 or feature_count == 0) return error.InvalidBinaryDataset;
 
-        var features = try std.ArrayList(f32).init(allocator);
+        var features = try std.array_list.Managed(f32).init(allocator);
         errdefer features.deinit();
         try features.resize(row_count * feature_count);
 
-        var labels = try std.ArrayList(f32).init(allocator);
+        var labels = try std.array_list.Managed(f32).init(allocator);
         errdefer labels.deinit();
         try labels.resize(row_count);
 
@@ -112,7 +129,7 @@ pub const CsvDataset = struct {
         if (max_val == 0) return error.InvalidImageFile;
 
         const feature_count = width * height;
-        var features = try std.ArrayList(f32).init(allocator);
+        var features = try std.array_list.Managed(f32).init(allocator);
         errdefer features.deinit();
         try features.resize(feature_count);
 
@@ -122,7 +139,7 @@ pub const CsvDataset = struct {
             features.items[i] = @as(f32, @floatFromInt(px)) / @as(f32, @floatFromInt(max_val));
         }
 
-        var labels = try std.ArrayList(f32).init(allocator);
+        var labels = try std.array_list.Managed(f32).init(allocator);
         errdefer labels.deinit();
         try labels.append(label);
 
@@ -141,16 +158,12 @@ pub const CsvDataset = struct {
         delimiter: u8,
         has_header: bool,
     ) !CsvDataset {
-        const file = try std.fs.cwd().openFile(path, .{});
-        defer file.close();
-
-        const max_bytes = std.math.maxInt(usize);
-        const file_content = try file.readToEndAlloc(allocator, max_bytes);
+        const file_content = try readFileAlloc(allocator, path);
         defer allocator.free(file_content);
 
-        var features = std.ArrayList(f32).init(allocator);
+        var features = try std.array_list.Managed(f32).initCapacity(allocator, 0);
         errdefer features.deinit();
-        var labels = std.ArrayList(f32).init(allocator);
+        var labels = try std.array_list.Managed(f32).initCapacity(allocator, 0);
         errdefer labels.deinit();
 
         var maybe_feature_count: ?usize = null;
@@ -163,7 +176,7 @@ pub const CsvDataset = struct {
             if (line.len == 0) continue;
             if (has_header and line_index == 0) continue;
 
-            var values = std.ArrayList(f32).init(allocator);
+            var values = try std.array_list.Managed(f32).initCapacity(allocator, 0);
             defer values.deinit();
             var columns = std.mem.splitScalar(u8, line, delimiter);
             while (columns.next()) |col| {
@@ -242,13 +255,13 @@ pub const CsvDataset = struct {
 
 pub const StandardScaler = struct {
     allocator: std.mem.Allocator,
-    means: std.ArrayList(f32),
-    stds: std.ArrayList(f32),
+    means: std.array_list.Managed(f32),
+    stds: std.array_list.Managed(f32),
 
     pub fn fit(allocator: std.mem.Allocator, dataset: Dataset, indices: []const usize) !StandardScaler {
         if (indices.len == 0) return error.EmptyDataset;
         const feature_count = dataset.featureCount();
-        var means = std.ArrayList(f32).init(allocator);
+        var means = std.array_list.Managed(f32).init(allocator);
         errdefer means.deinit();
         try means.resize(feature_count);
         @memset(means.items, 0.0);
@@ -262,7 +275,7 @@ pub const StandardScaler = struct {
         const n = @as(f32, @floatFromInt(indices.len));
         for (0..feature_count) |f| means.items[f] /= n;
 
-        var stds = std.ArrayList(f32).init(allocator);
+        var stds = std.array_list.Managed(f32).init(allocator);
         errdefer stds.deinit();
         try stds.resize(feature_count);
         @memset(stds.items, 0.0);
@@ -292,16 +305,16 @@ pub const StandardScaler = struct {
 
 pub const MinMaxScaler = struct {
     allocator: std.mem.Allocator,
-    mins: std.ArrayList(f32),
-    maxs: std.ArrayList(f32),
+    mins: std.array_list.Managed(f32),
+    maxs: std.array_list.Managed(f32),
 
     pub fn fit(allocator: std.mem.Allocator, dataset: Dataset, indices: []const usize) !MinMaxScaler {
         if (indices.len == 0) return error.EmptyDataset;
         const feature_count = dataset.featureCount();
-        var mins = std.ArrayList(f32).init(allocator);
+        var mins = std.array_list.Managed(f32).init(allocator);
         errdefer mins.deinit();
         try mins.resize(feature_count);
-        var maxs = std.ArrayList(f32).init(allocator);
+        var maxs = std.array_list.Managed(f32).init(allocator);
         errdefer maxs.deinit();
         try maxs.resize(feature_count);
         @memset(mins.items, std.math.inf(f32));
@@ -356,9 +369,9 @@ pub const Augmentation = union(enum) {
 
 pub const DataSplit = struct {
     allocator: std.mem.Allocator,
-    train_indices: std.ArrayList(usize),
-    val_indices: std.ArrayList(usize),
-    test_indices: std.ArrayList(usize),
+    train_indices: std.array_list.Managed(usize),
+    val_indices: std.array_list.Managed(usize),
+    test_indices: std.array_list.Managed(usize),
 
     pub fn deinit(self: *DataSplit) void {
         self.train_indices.deinit();
@@ -382,11 +395,10 @@ pub fn splitIndices(
     if (train_ratio <= 0.0 or val_ratio < 0.0) return error.InvalidSplitRatio;
     if (train_ratio + val_ratio > 1.0) return error.InvalidSplitRatio;
 
-    var shuffled = std.ArrayList(usize).init(allocator);
+    var shuffled = try std.array_list.Managed(usize).initCapacity(allocator, total_rows);
     defer shuffled.deinit();
-    try shuffled.ensureTotalCapacity(total_rows);
     for (0..total_rows) |idx| {
-        shuffled.appendAssumeCapacity(idx);
+        try shuffled.append(idx);
     }
 
     var prng = std.Random.DefaultPrng.init(seed);
@@ -399,15 +411,15 @@ pub fn splitIndices(
     const safe_val = @min(val_count, total_rows - safe_train);
     const test_start = safe_train + safe_val;
 
-    var train_indices = std.ArrayList(usize).init(allocator);
+    var train_indices = std.array_list.Managed(usize).init(allocator);
     errdefer train_indices.deinit();
     try train_indices.appendSlice(shuffled.items[0..safe_train]);
 
-    var val_indices = std.ArrayList(usize).init(allocator);
+    var val_indices = std.array_list.Managed(usize).init(allocator);
     errdefer val_indices.deinit();
     try val_indices.appendSlice(shuffled.items[safe_train..test_start]);
 
-    var test_indices = std.ArrayList(usize).init(allocator);
+    var test_indices = std.array_list.Managed(usize).init(allocator);
     errdefer test_indices.deinit();
     try test_indices.appendSlice(shuffled.items[test_start..]);
 
@@ -423,9 +435,9 @@ pub fn shardIndices(
     allocator: std.mem.Allocator,
     indices: []const usize,
     shard: DistributedShard,
-) !std.ArrayList(usize) {
+) !std.array_list.Managed(usize) {
     if (shard.world_size == 0 or shard.rank >= shard.world_size) return error.InvalidDistributedShard;
-    var out = std.ArrayList(usize).init(allocator);
+    var out = std.array_list.Managed(usize).init(allocator);
     errdefer out.deinit();
     for (indices, 0..) |idx, pos| {
         if (pos % shard.world_size == shard.rank) try out.append(idx);
@@ -487,17 +499,17 @@ pub const DataLoader = struct {
     allocator: std.mem.Allocator,
     dataset: Dataset,
     config: DataLoaderConfig,
-    epoch_indices: std.ArrayList(usize),
+    epoch_indices: std.array_list.Managed(usize),
     position: usize,
     rng: std.Random.DefaultPrng,
     row_buffer: []f32,
-    batch_features: std.ArrayList(f32),
-    batch_labels: std.ArrayList(f32),
-    prefetched_features: std.ArrayList(f32),
-    prefetched_labels: std.ArrayList(f32),
+    batch_features: std.array_list.Managed(f32),
+    batch_labels: std.array_list.Managed(f32),
+    prefetched_features: std.array_list.Managed(f32),
+    prefetched_labels: std.array_list.Managed(f32),
     prefetched_len: usize,
     has_prefetched: bool,
-    cache: std.AutoHashMap(usize, std.ArrayList(f32)),
+    cache: std.AutoHashMap(usize, std.array_list.Managed(f32)),
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -517,13 +529,13 @@ pub const DataLoader = struct {
             .position = 0,
             .rng = std.Random.DefaultPrng.init(config.seed),
             .row_buffer = try allocator.alloc(f32, dataset.featureCount()),
-            .batch_features = std.ArrayList(f32).init(allocator),
-            .batch_labels = std.ArrayList(f32).init(allocator),
-            .prefetched_features = std.ArrayList(f32).init(allocator),
-            .prefetched_labels = std.ArrayList(f32).init(allocator),
+            .batch_features = std.array_list.Managed(f32).init(allocator),
+            .batch_labels = std.array_list.Managed(f32).init(allocator),
+            .prefetched_features = std.array_list.Managed(f32).init(allocator),
+            .prefetched_labels = std.array_list.Managed(f32).init(allocator),
             .prefetched_len = 0,
             .has_prefetched = false,
-            .cache = std.AutoHashMap(usize, std.ArrayList(f32)).init(allocator),
+            .cache = std.AutoHashMap(usize, std.array_list.Managed(f32)).init(allocator),
         };
         try dl.reset();
         return dl;
@@ -591,8 +603,8 @@ pub const DataLoader = struct {
 
     fn computeNextBatchInto(
         self: *DataLoader,
-        features_buf: *std.ArrayList(f32),
-        labels_buf: *std.ArrayList(f32),
+        features_buf: *std.array_list.Managed(f32),
+        labels_buf: *std.array_list.Managed(f32),
     ) !?usize {
         if (self.position >= self.epoch_indices.items.len) return null;
         features_buf.clearRetainingCapacity();
@@ -621,7 +633,7 @@ pub const DataLoader = struct {
         }
         try self.dataset.fillRowFeatures(idx, out);
         if (self.config.use_cache) {
-            var arr = std.ArrayList(f32).init(self.allocator);
+            var arr = std.array_list.Managed(f32).init(self.allocator);
             try arr.appendSlice(out);
             try self.cache.put(idx, arr);
         }
@@ -639,7 +651,7 @@ pub const DataLoader = struct {
     }
 
     fn stratifiedOrder(self: *DataLoader) !void {
-        var groups = std.AutoHashMap(u32, std.ArrayList(usize)).init(self.allocator);
+        var groups = std.AutoHashMap(u32, std.array_list.Managed(usize)).init(self.allocator);
         defer {
             var g_it = groups.valueIterator();
             while (g_it.next()) |arr| arr.deinit();
@@ -651,14 +663,13 @@ pub const DataLoader = struct {
             if (groups.getPtr(key)) |arr| {
                 try arr.append(idx);
             } else {
-                var arr = std.ArrayList(usize).init(self.allocator);
-                defer arr.deinit();
+                var arr = std.array_list.Managed(usize).init(self.allocator);
                 try arr.append(idx);
                 try groups.put(key, arr);
             }
         }
 
-        var keys = std.ArrayList(u32).init(self.allocator);
+        var keys = std.array_list.Managed(u32).init(self.allocator);
         defer keys.deinit();
         var it = groups.iterator();
         while (it.next()) |entry| try keys.append(entry.key_ptr.*);

@@ -113,7 +113,7 @@ test "LSTM Neural Network Build Test" {
     const batch = 1;
     const input_size = 3;
 
-    var sequence = try std.ArrayList(trix.DataObject).initCapacity(allocator, seq_len);
+    var sequence = try std.array_list.Managed(trix.DataObject).initCapacity(allocator, seq_len);
     defer {
         for (sequence.items) |*item| {
             item.deinit();
@@ -131,7 +131,7 @@ test "LSTM Neural Network Build Test" {
     }
 
     // Convert to pointer slice for forward pass
-    var seq_ptrs = try std.ArrayList(*trix.DataObject).initCapacity(allocator, seq_len);
+    var seq_ptrs = try std.array_list.Managed(*trix.DataObject).initCapacity(allocator, seq_len);
     defer seq_ptrs.deinit();
 
     for (sequence.items) |*item| {

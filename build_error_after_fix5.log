@@ -1,0 +1,53 @@
+test
++- run test
+   +- compile test Debug native 4 errors
+src\data_pipeline.zig:154:24: error: no field or member function named 'deinit' in 'error{OutOfMemory}!array_list.AlignedManaged(f32,null)'
+        errdefer labels.deinit();
+                 ~~~~~~^~~~~~~
+src\data_pipeline.zig:154:24: note: consider using 'try', 'catch', or 'if'
+referenced by:
+    loadFromCsv: src\data_pipeline.zig:39:29
+    test.scalers fit and transform features: tests\framework_tests.zig:141:58
+src\data_pipeline.zig:388:21: error: no field or member function named 'append' in 'error{OutOfMemory}!array_list.AlignedManaged(usize,null)'
+        try shuffled.append(allocator, idx);
+            ~~~~~~~~^~~~~~~
+src\data_pipeline.zig:388:21: note: consider using 'try', 'catch', or 'if'
+src\layers.zig:1334:24: error: member function expected 1 argument(s), found 2
+        try self.layers.append(self.allocator, try LinearLayer.init(self.allocator, input_size, output_size, activation, forward_fn, backprop_fn));
+            ~~~~~~~~~~~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:251:13: note: function declared here
+        pub fn append(self: *Self, item: T) Allocator.Error!void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src\matrix.zig:52:39: error: member function expected 1 argument(s), found 2
+        for (dims) |sh| try shape_list.append(allocator, sh);
+                            ~~~~~~~~~~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:251:13: note: function declared here
+        pub fn append(self: *Self, item: T) Allocator.Error!void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+error: the following command failed with 4 compilation errors:
+"C:\\Users\\Thomas\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" test -ODebug --dep modelwork2 "-Mroot=C:\\Users\\Thomas\\sigwork\\tests\\framework_tests.zig" -ODebug "-Mmodelwork2=C:\\Users\\Thomas\\sigwork\\src\\lib.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\Thomas\\AppData\\Local\\zig" --name test --zig-lib-dir "C:\\Users\\Thomas\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+test
++- run test
+   +- compile test Debug native 1 errors
+src\matrix.zig:52:39: error: member function expected 1 argument(s), found 2
+        for (dims) |sh| try shape_list.append(allocator, sh);
+                            ~~~~~~~~~~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:251:13: note: function declared here
+        pub fn append(self: *Self, item: T) Allocator.Error!void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+referenced by:
+    init: src\layers.zig:894:46
+    init: src\layers.zig:1112:43
+    2 reference(s) hidden; use '-freference-trace=4' to see all references
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\Thomas\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" test -ODebug --dep modelwork2 "-Mroot=C:\\Users\\Thomas\\sigwork\\tests\\Modelrunt.zig" -ODebug "-Mmodelwork2=C:\\Users\\Thomas\\sigwork\\src\\lib.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\Thomas\\AppData\\Local\\zig" --name test --zig-lib-dir "C:\\Users\\Thomas\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+
+Build Summary: 0/5 steps succeeded; 2 failed
+test transitive failure
++- run test transitive failure
+|  +- compile test Debug native 4 errors
++- run test transitive failure
+   +- compile test Debug native 1 errors
+
+error: the following build command failed with exit code 1:
+.zig-cache\o\4b71efc36d15fdf7cf3c63372ee33d6d\build.exe C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\zig.exe C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib C:\Users\Thomas\sigwork .zig-cache C:\Users\Thomas\AppData\Local\zig --seed 0xb398dbe4 -Zf5d255d01d5e43b7 test

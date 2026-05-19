@@ -1,6 +1,26 @@
 const std = @import("std");
 const lib = @import("modelwork2");
 
+fn writeTestFile(dir: anytype, sub_path: []const u8, data: []const u8) !void {
+    if (@hasDecl(std.testing, "io")) {
+        try dir.writeFile(std.testing.io, .{ .sub_path = sub_path, .data = data });
+    } else {
+        try dir.writeFile(.{ .sub_path = sub_path, .data = data });
+    }
+}
+
+fn tmpFilePath(allocator: std.mem.Allocator, tmp: anytype, sub_path: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/{s}", .{ tmp.sub_path, sub_path });
+}
+
+fn accessTestFile(dir: anytype, sub_path: []const u8) !void {
+    if (@hasDecl(std.testing, "io")) {
+        try dir.access(std.testing.io, sub_path, .{});
+    } else {
+        try dir.access(sub_path, .{});
+    }
+}
+
 test "core modules compile and basic tensor operations run" {
     const allocator = std.testing.allocator;
 
@@ -31,15 +51,11 @@ test "data pipeline loads csv and exposes rows" {
         \\1.0,2.0,0.0
         \\3.0,4.0,1.0
     ;
-    try tmp.dir.writeFile(.{ .sub_path = "sample.csv", .data = csv_content });
+    try writeTestFile(tmp.dir, "sample.csv", csv_content);
 
-    const cwd = std.fs.cwd();
-    var prev_dir = try cwd.openDir(".", .{});
-    defer prev_dir.close();
-    try tmp.dir.setAsCwd();
-    defer prev_dir.setAsCwd() catch {};
-
-    var dataset = try lib.data_pipeline.CsvDataset.loadFromCsv(allocator, "sample.csv", true);
+    const sample_path = try tmpFilePath(allocator, tmp, "sample.csv");
+    defer allocator.free(sample_path);
+    var dataset = try lib.data_pipeline.CsvDataset.loadFromCsv(allocator, sample_path, true);
     defer dataset.deinit();
 
     try std.testing.expectEqual(@as(usize, 2), dataset.row_count);
@@ -85,15 +101,11 @@ test "data loader supports stratified batches and caching/prefetch" {
         \\5,50,0
         \\6,60,1
     ;
-    try tmp.dir.writeFile(.{ .sub_path = "loader.csv", .data = csv_content });
+    try writeTestFile(tmp.dir, "loader.csv", csv_content);
 
-    const cwd = std.fs.cwd();
-    var prev_dir = try cwd.openDir(".", .{});
-    defer prev_dir.close();
-    try tmp.dir.setAsCwd();
-    defer prev_dir.setAsCwd() catch {};
-
-    var ds = try lib.data_pipeline.CsvDataset.loadFromCsv(allocator, "loader.csv", true);
+    const loader_path = try tmpFilePath(allocator, tmp, "loader.csv");
+    defer allocator.free(loader_path);
+    var ds = try lib.data_pipeline.CsvDataset.loadFromCsv(allocator, loader_path, true);
     defer ds.deinit();
 
     var split = try lib.data_pipeline.splitIndices(allocator, ds.row_count, 1.0, 0.0, 1);
@@ -130,15 +142,11 @@ test "scalers fit and transform features" {
         \\3,4,1
         \\5,6,0
     ;
-    try tmp.dir.writeFile(.{ .sub_path = "scale.csv", .data = csv_content });
+    try writeTestFile(tmp.dir, "scale.csv", csv_content);
 
-    const cwd = std.fs.cwd();
-    var prev_dir = try cwd.openDir(".", .{});
-    defer prev_dir.close();
-    try tmp.dir.setAsCwd();
-    defer prev_dir.setAsCwd() catch {};
-
-    var ds = try lib.data_pipeline.CsvDataset.loadFromCsv(allocator, "scale.csv", true);
+    const scale_path = try tmpFilePath(allocator, tmp, "scale.csv");
+    defer allocator.free(scale_path);
+    var ds = try lib.data_pipeline.CsvDataset.loadFromCsv(allocator, scale_path, true);
     defer ds.deinit();
 
     const idx = [_]usize{ 0, 1, 2 };
@@ -421,13 +429,10 @@ test "section 7 trainer tracks history and checkpoint" {
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const cwd = std.fs.cwd();
-    var prev_dir = try cwd.openDir(".", .{});
-    defer prev_dir.close();
-    try tmp.dir.setAsCwd();
-    defer prev_dir.setAsCwd() catch {};
-    try trainer.saveCheckpoint("ckpt.txt");
-    try tmp.dir.access("ckpt.txt", .{});
+    const ckpt_path = try tmpFilePath(allocator, tmp, "ckpt.txt");
+    defer allocator.free(ckpt_path);
+    try trainer.saveCheckpoint(ckpt_path);
+    try accessTestFile(tmp.dir, "ckpt.txt");
 }
 
 test "section 10 tensor utility operations" {

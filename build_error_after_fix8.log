@@ -1,0 +1,74 @@
+test
++- run test
+   +- compile test Debug native 1 errors
+src\matrix.zig:107:33: error: member function expected 0 argument(s), found 1
+        if (self.strides) |*s| s.deinit(self.allocator);
+                               ~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:62:13: note: function declared here
+        pub fn deinit(self: Self) void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~
+referenced by:
+    deinit: src\layers.zig:1008:25
+    deinit: src\layers.zig:238:39
+    3 reference(s) hidden; use '-freference-trace=5' to see all references
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\Thomas\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" test -ODebug --dep modelwork2 "-Mroot=C:\\Users\\Thomas\\sigwork\\tests\\Modelrunt.zig" -ODebug "-Mmodelwork2=C:\\Users\\Thomas\\sigwork\\src\\lib.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\Thomas\\AppData\\Local\\zig" --name test --zig-lib-dir "C:\\Users\\Thomas\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+test
++- run test
+   +- compile test Debug native 7 errors
+src\autodiff.zig:22:43: error: struct 'array_list.Aligned(autodiff.OpRecord,null)' has no member named 'init'
+            .ops = std.ArrayList(OpRecord).init(allocator),
+                   ~~~~~~~~~~~~~~~~~~~~~~~^~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:606:12: note: struct declared here
+    return struct {
+           ^~~~~~
+referenced by:
+    test.section 4 autodiff tape and detach utilities: tests\framework_tests.zig:324:38
+src\autodiff.zig:29:25: error: member function expected 1 argument(s), found 0
+            op.input_ids.deinit();
+            ~~~~~~~~~~~~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:654:13: note: function declared here
+        pub fn deinit(self: *Self, gpa: Allocator) void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src\autodiff.zig:52:21: error: member function expected 2 argument(s), found 1
+        try self.ops.append(.{
+            ~~~~~~~~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:893:13: note: function declared here
+        pub fn append(self: *Self, gpa: Allocator, item: T) Allocator.Error!void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src\data_pipeline.zig:181:25: error: member function expected 1 argument(s), found 2
+            try features.appendSlice(allocator, values.items[0..current_feature_count]);
+                ~~~~~~~~^~~~~~~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:293:13: note: function declared here
+        pub fn appendSlice(self: *Self, items: []const T) Allocator.Error!void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src\layers.zig:1338:70: error: expected type 'array_list.AlignedManaged(layers.Layer,null)', found 'array_list.AlignedManaged(layers.LinearLayer,null)'
+        var nn = NeuralNetwork{ .allocator = self.allocator, .layers = self.layers };
+                                                             ~~~~~~~~^~~~~~~~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:22:12: note: struct declared here (2 times)
+    return struct {
+           ^~~~~~
+src\matrix.zig:107:33: error: member function expected 0 argument(s), found 1
+        if (self.strides) |*s| s.deinit(self.allocator);
+                               ~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:62:13: note: function declared here
+        pub fn deinit(self: Self) void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~
+src\trainer.zig:86:49: error: no field named 'weights' in union 'layers.Layer'
+                grad.clipGradientsByNorm(&layer.weights, max_norm);
+                                                ^~~~~~~
+src\layers.zig:181:19: note: union declared here
+pub const Layer = union(LayerType) {
+                  ^~~~~
+error: the following command failed with 7 compilation errors:
+"C:\\Users\\Thomas\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" test -ODebug --dep modelwork2 "-Mroot=C:\\Users\\Thomas\\sigwork\\tests\\framework_tests.zig" -ODebug "-Mmodelwork2=C:\\Users\\Thomas\\sigwork\\src\\lib.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\Thomas\\AppData\\Local\\zig" --name test --zig-lib-dir "C:\\Users\\Thomas\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+
+Build Summary: 0/5 steps succeeded; 2 failed
+test transitive failure
++- run test transitive failure
+|  +- compile test Debug native 7 errors
++- run test transitive failure
+   +- compile test Debug native 1 errors
+
+error: the following build command failed with exit code 1:
+.zig-cache\o\4b71efc36d15fdf7cf3c63372ee33d6d\build.exe C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\zig.exe C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib C:\Users\Thomas\sigwork .zig-cache C:\Users\Thomas\AppData\Local\zig --seed 0x54ef6c94 -Z26a41a25da1ca5c8 test

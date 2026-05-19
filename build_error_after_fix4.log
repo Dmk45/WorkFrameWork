@@ -1,0 +1,123 @@
+test
++- run test
+   +- compile test Debug native 3 errors
+src\layers.zig:284:28: error: member function expected 2 argument(s), found 1
+            try self.layers.append(Layer{ .lstm = layer });
+                ~~~~~~~~~~~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:893:13: note: function declared here
+        pub fn append(self: *Self, gpa: Allocator, item: T) Allocator.Error!void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+referenced by:
+    init: tests\Modelrunt.zig:18:19
+    test.LSTM Neural Network Build Test: tests\Modelrunt.zig:108:40
+src\layers.zig:1033:19: error: member function expected 1 argument(s), found 0
+    defer c_states.deinit();
+          ~~~~~~~~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:654:13: note: function declared here
+        pub fn deinit(self: *Self, gpa: Allocator) void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src\matrix.zig:108:20: error: member function expected 1 argument(s), found 0
+        self.values.deinit();
+        ~~~~~~~~~~~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:654:13: note: function declared here
+        pub fn deinit(self: *Self, gpa: Allocator) void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+error: the following command failed with 3 compilation errors:
+"C:\\Users\\Thomas\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" test -ODebug --dep modelwork2 "-Mroot=C:\\Users\\Thomas\\sigwork\\tests\\Modelrunt.zig" -ODebug "-Mmodelwork2=C:\\Users\\Thomas\\sigwork\\src\\lib.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\Thomas\\AppData\\Local\\zig" --name test --zig-lib-dir "C:\\Users\\Thomas\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+test
++- run test
+   +- compile test Debug native 14 errors
+src\autodiff.zig:22:43: error: struct 'array_list.Aligned(autodiff.OpRecord,null)' has no member named 'init'
+            .ops = std.ArrayList(OpRecord).init(allocator),
+                   ~~~~~~~~~~~~~~~~~~~~~~~^~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:606:12: note: struct declared here
+    return struct {
+           ^~~~~~
+referenced by:
+    test.section 4 autodiff tape and detach utilities: tests\framework_tests.zig:324:38
+src\autodiff.zig:29:25: error: member function expected 1 argument(s), found 0
+            op.input_ids.deinit();
+            ~~~~~~~~~~~~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:654:13: note: function declared here
+        pub fn deinit(self: *Self, gpa: Allocator) void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src\autodiff.zig:52:21: error: member function expected 2 argument(s), found 1
+        try self.ops.append(.{
+            ~~~~~~~~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:893:13: note: function declared here
+        pub fn append(self: *Self, gpa: Allocator, item: T) Allocator.Error!void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src\core_math.zig:280:27: error: member function expected 2 argument(s), found 1
+        try tensor.shape.?.append(dim);
+            ~~~~~~~~~~~~~~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:893:13: note: function declared here
+        pub fn append(self: *Self, gpa: Allocator, item: T) Allocator.Error!void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src\core_math.zig:518:26: error: member function expected 1 argument(s), found 0
+        defer col_offsets.deinit();
+              ~~~~~~~~~~~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:654:13: note: function declared here
+        pub fn deinit(self: *Self, gpa: Allocator) void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src\data_pipeline.zig:154:24: error: no field or member function named 'deinit' in 'error{OutOfMemory}!array_list.Aligned(f32,null)'
+        errdefer labels.deinit();
+                 ~~~~~~^~~~~~~
+src\data_pipeline.zig:154:24: note: consider using 'try', 'catch', or 'if'
+src\data_pipeline.zig:388:21: error: no field or member function named 'append' in 'error{OutOfMemory}!array_list.Aligned(usize,null)'
+        try shuffled.append(allocator, idx);
+            ~~~~~~~~^~~~~~~
+src\data_pipeline.zig:388:21: note: consider using 'try', 'catch', or 'if'
+src\grad.zig:196:32: error: member function expected 2 argument(s), found 1
+            try self.velocity.?.resize(param.values.items.len);
+                ~~~~~~~~~~~~~~~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:1144:13: note: function declared here
+        pub fn resize(self: *Self, gpa: Allocator, new_len: usize) Allocator.Error!void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src\layers.zig:276:28: error: member function expected 2 argument(s), found 1
+            try self.layers.append(Layer{ .linear = layer });
+                ~~~~~~~~~~~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:893:13: note: function declared here
+        pub fn append(self: *Self, gpa: Allocator, item: T) Allocator.Error!void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src\layers.zig:354:20: error: member function expected 1 argument(s), found 0
+        self.layers.deinit();
+        ~~~~~~~~~~~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:654:13: note: function declared here
+        pub fn deinit(self: *Self, gpa: Allocator) void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src\layers.zig:1198:19: error: member function expected 1 argument(s), found 0
+        self.cells.deinit();
+        ~~~~~~~~~~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:654:13: note: function declared here
+        pub fn deinit(self: *Self, gpa: Allocator) void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src\layers.zig:1338:70: error: expected type 'array_list.Aligned(layers.Layer,null)', found 'array_list.Aligned(layers.LinearLayer,null)'
+        var nn = NeuralNetwork{ .allocator = self.allocator, .layers = self.layers };
+                                                             ~~~~~~~~^~~~~~~~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:606:12: note: struct declared here (2 times)
+    return struct {
+           ^~~~~~
+src\layers.zig:1344:20: error: member function expected 1 argument(s), found 0
+        self.layers.deinit();
+        ~~~~~~~~~~~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:654:13: note: function declared here
+        pub fn deinit(self: *Self, gpa: Allocator) void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src\matrix.zig:108:20: error: member function expected 1 argument(s), found 0
+        self.values.deinit();
+        ~~~~~~~~~~~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:654:13: note: function declared here
+        pub fn deinit(self: *Self, gpa: Allocator) void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+error: the following command failed with 14 compilation errors:
+"C:\\Users\\Thomas\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" test -ODebug --dep modelwork2 "-Mroot=C:\\Users\\Thomas\\sigwork\\tests\\framework_tests.zig" -ODebug "-Mmodelwork2=C:\\Users\\Thomas\\sigwork\\src\\lib.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\Thomas\\AppData\\Local\\zig" --name test --zig-lib-dir "C:\\Users\\Thomas\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+
+Build Summary: 0/5 steps succeeded; 2 failed
+test transitive failure
++- run test transitive failure
+|  +- compile test Debug native 14 errors
++- run test transitive failure
+   +- compile test Debug native 3 errors
+
+error: the following build command failed with exit code 1:
+.zig-cache\o\4b71efc36d15fdf7cf3c63372ee33d6d\build.exe C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\zig.exe C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib C:\Users\Thomas\sigwork .zig-cache C:\Users\Thomas\AppData\Local\zig --seed 0xdd4231ae -Z5f6ad6e8928975f6 test

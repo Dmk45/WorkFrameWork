@@ -18,20 +18,24 @@ pub fn build(b: *std.Build) void {
 
     const comprehensive_example = b.addExecutable(.{
         .name = "example-comprehensive",
-        .root_source_file = b.path("examples/test_comprehensive.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/test_comprehensive.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "modelwork2", .module = framework_module }},
+        }),
     });
-    comprehensive_example.root_module.addImport("modelwork2", framework_module);
     b.installArtifact(comprehensive_example);
 
     const layers_example = b.addExecutable(.{
         .name = "example-layers",
-        .root_source_file = b.path("examples/test_layers.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/test_layers.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "modelwork2", .module = framework_module }},
+        }),
     });
-    layers_example.root_module.addImport("modelwork2", framework_module);
     b.installArtifact(layers_example);
 
     const run_comprehensive = b.addRunArtifact(comprehensive_example);
@@ -46,20 +50,24 @@ pub fn build(b: *std.Build) void {
     // =========================
 
     const unit_tests = b.addTest(.{
-        .root_source_file = b.path("tests/framework_tests.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/framework_tests.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "modelwork2", .module = framework_module }},
+        }),
         .filters = if (test_filter) |f| &.{f} else &.{},
     });
-    unit_tests.root_module.addImport("modelwork2", framework_module);
 
     const modelrunt_tests = b.addTest(.{
-        .root_source_file = b.path("tests/Modelrunt.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/Modelrunt.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "modelwork2", .module = framework_module }},
+        }),
         .filters = if (test_filter) |f| &.{f} else &.{},
     });
-    modelrunt_tests.root_module.addImport("modelwork2", framework_module);
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
     const run_modelrunt_tests = b.addRunArtifact(modelrunt_tests);
@@ -73,9 +81,13 @@ pub fn build(b: *std.Build) void {
     // =========================
 
     const docs_cmd = b.addSystemCommand(&[_][]const u8{
-        "zig",
+        b.graph.zig_exe,
         "test",
         "src/lib.zig",
+        "--cache-dir",
+        b.cache_root.path orelse ".zig-cache",
+        "--global-cache-dir",
+        b.graph.global_cache_root.path orelse ".zig-cache",
         "-femit-docs",
         "--name",
         "modelwork2-docs",

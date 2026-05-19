@@ -458,7 +458,7 @@ pub fn abs(allocator: std.mem.Allocator, tensor: *trix.DataObject) !trix.DataObj
 pub fn squeeze(allocator: std.mem.Allocator, tensor: *trix.DataObject, axis: usize) !trix.DataObject {
     const s = tensor.shape.?.items;
     if (axis >= s.len or s[axis] != 1) return error.ShapeMismatch;
-    var new_shape = try std.ArrayList(usize).initCapacity(allocator, s.len - 1);
+    var new_shape = try std.array_list.Managed(usize).initCapacity(allocator, s.len - 1);
     defer new_shape.deinit();
     for (s, 0..) |dim, i| {
         if (i != axis) try new_shape.append(dim);
@@ -472,7 +472,7 @@ pub fn squeeze(allocator: std.mem.Allocator, tensor: *trix.DataObject, axis: usi
 pub fn unsqueeze(allocator: std.mem.Allocator, tensor: *trix.DataObject, axis: usize) !trix.DataObject {
     const s = tensor.shape.?.items;
     if (axis > s.len) return error.ShapeMismatch;
-    var new_shape = try std.ArrayList(usize).initCapacity(allocator, s.len + 1);
+    var new_shape = try std.array_list.Managed(usize).initCapacity(allocator, s.len + 1);
     defer new_shape.deinit();
     for (0..s.len + 1) |i| {
         if (i == axis) {
@@ -514,7 +514,7 @@ pub fn concatenate(allocator: std.mem.Allocator, tensors: []const *trix.DataObje
         }
     } else {
         const rows = base[0];
-        var col_offsets = try std.ArrayList(usize).initCapacity(allocator, tensors.len);
+        var col_offsets = try std.array_list.Managed(usize).initCapacity(allocator, tensors.len);
         defer col_offsets.deinit();
         var running: usize = 0;
         for (tensors) |t| {
@@ -552,13 +552,13 @@ pub fn stack(allocator: std.mem.Allocator, tensors: []const *trix.DataObject) !t
 }
 
 /// Split a rank-2 tensor into contiguous chunks along axis 1.
-pub fn split(allocator: std.mem.Allocator, tensor: *trix.DataObject, chunk_size: usize, axis: usize) !std.ArrayList(trix.DataObject) {
+pub fn split(allocator: std.mem.Allocator, tensor: *trix.DataObject, chunk_size: usize, axis: usize) !std.array_list.Managed(trix.DataObject) {
     const s = tensor.shape.?.items;
     if (s.len != 2 or axis != 1 or chunk_size == 0 or s[1] % chunk_size != 0) return error.ShapeMismatch;
     const rows = s[0];
     const cols = s[1];
     const chunks = cols / chunk_size;
-    var out = try std.ArrayList(trix.DataObject).initCapacity(allocator, chunks);
+    var out = try std.array_list.Managed(trix.DataObject).initCapacity(allocator, chunks);
     for (0..chunks) |c| {
         var part = try trix.DataObject.init(allocator, &[_]usize{ rows, chunk_size }, .f32);
         for (0..rows) |r| {

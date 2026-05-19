@@ -1,0 +1,68 @@
+test
++- run test
+   +- compile test Debug native 5 errors
+src\core_math.zig:278:19: error: member function expected 0 argument(s), found 1
+    tensor.shape.?.clearAndFree(tensor.allocator);
+    ~~~~~~~~~~~~~~^~~~~~~~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:426:13: note: function declared here
+        pub fn clearAndFree(self: *Self) void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+referenced by:
+    reshapeDynamic: src\layers.zig:737:21
+    test.section 3 core and advanced layer features: tests\framework_tests.zig:198:34
+src\core_math.zig:521:28: error: member function expected 1 argument(s), found 2
+            try col_offsets.append(allocator, running);
+                ~~~~~~~~~~~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:251:13: note: function declared here
+        pub fn append(self: *Self, item: T) Allocator.Error!void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src\data_pipeline.zig:172:27: error: member function expected 1 argument(s), found 2
+                try values.append(allocator, std.fmt.parseFloat(f32, token) catch return error.InvalidCsvValue);
+                    ~~~~~~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:251:13: note: function declared here
+        pub fn append(self: *Self, item: T) Allocator.Error!void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src\matrix.zig:106:31: error: member function expected 0 argument(s), found 1
+        if (self.shape) |*s| s.deinit(self.allocator);
+                             ~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:62:13: note: function declared here
+        pub fn deinit(self: Self) void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~
+src\matrix.zig:135:34: error: member function expected 1 argument(s), found 2
+            try self.grad_value.?.resize(self.allocator, self.values.items.len);
+                ~~~~~~~~~~~~~~~~~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:398:13: note: function declared here
+        pub fn resize(self: *Self, new_len: usize) Allocator.Error!void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+error: the following command failed with 5 compilation errors:
+"C:\\Users\\Thomas\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" test -ODebug --dep modelwork2 "-Mroot=C:\\Users\\Thomas\\sigwork\\tests\\framework_tests.zig" -ODebug "-Mmodelwork2=C:\\Users\\Thomas\\sigwork\\src\\lib.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\Thomas\\AppData\\Local\\zig" --name test --zig-lib-dir "C:\\Users\\Thomas\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+test
++- run test
+   +- compile test Debug native 2 errors
+src\layers.zig:1113:22: error: member function expected 1 argument(s), found 2
+            try cells.append(allocator, cell);
+                ~~~~~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:251:13: note: function declared here
+        pub fn append(self: *Self, item: T) Allocator.Error!void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+referenced by:
+    init: tests\Modelrunt.zig:17:47
+    test.LSTM Neural Network Build Test: tests\Modelrunt.zig:108:40
+src\matrix.zig:106:31: error: member function expected 0 argument(s), found 1
+        if (self.shape) |*s| s.deinit(self.allocator);
+                             ~^~~~~~~
+C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib\std\array_list.zig:62:13: note: function declared here
+        pub fn deinit(self: Self) void {
+        ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~
+error: the following command failed with 2 compilation errors:
+"C:\\Users\\Thomas\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" test -ODebug --dep modelwork2 "-Mroot=C:\\Users\\Thomas\\sigwork\\tests\\Modelrunt.zig" -ODebug "-Mmodelwork2=C:\\Users\\Thomas\\sigwork\\src\\lib.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\Thomas\\AppData\\Local\\zig" --name test --zig-lib-dir "C:\\Users\\Thomas\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+
+Build Summary: 0/5 steps succeeded; 2 failed
+test transitive failure
++- run test transitive failure
+|  +- compile test Debug native 5 errors
++- run test transitive failure
+   +- compile test Debug native 2 errors
+
+error: the following build command failed with exit code 1:
+.zig-cache\o\4b71efc36d15fdf7cf3c63372ee33d6d\build.exe C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\zig.exe C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib C:\Users\Thomas\sigwork .zig-cache C:\Users\Thomas\AppData\Local\zig --seed 0x631d08b0 -Z8cd9172e0506783a test

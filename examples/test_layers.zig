@@ -21,13 +21,16 @@ pub fn main() !void {
     // Add layers without manually touching the tape!
     std.debug.print("\nBuilding model architecture:\n", .{});
     std.debug.print("  Layer 1: Linear(10 → 5, relu)\n", .{});
-    try layers_mod.LinearLayer.addNN(&nn, 10, 5, "relu");
+    const layer1 = try layers_mod.LinearLayer.init(allocator, 10, 5, "relu", null, null);
+    try nn.add(layer1);
 
     std.debug.print("  Layer 2: Linear(5 → 3, relu)\n", .{});
-    try layers_mod.LinearLayer.addNN(&nn, 5, 3, "relu");
+    const layer2 = try layers_mod.LinearLayer.init(allocator, 5, 3, "relu", null, null);
+    try nn.add(layer2);
 
     std.debug.print("  Output: Linear(3 → 2, none)\n", .{});
-    try layers_mod.LinearLayer.addNN(&nn, 3, 2, "none");
+    const layer3 = try layers_mod.LinearLayer.init(allocator, 3, 2, "none", null, null);
+    try nn.add(layer3);
 
     // Example of using other layer types:
     // try layers_mod.LSTMCell.addNN(&nn, 10, 5);
@@ -93,7 +96,13 @@ pub fn main() !void {
     std.debug.print("Final model structure:\n", .{});
     for (0..nn.num_layers()) |i| {
         if (nn.get_layer(i)) |layer| {
-            std.debug.print("  Layer {}: {s} - weights shape: {any}\n", .{ i + 1, layer.config.activation, layer.weights.shape.?.items });
+            switch (layer.*) {
+                .linear => |*linear| std.debug.print(
+                    "  Layer {}: {s} - weights shape: {any}\n",
+                    .{ i + 1, linear.config.activation, linear.weights.shape.?.items },
+                ),
+                else => std.debug.print("  Layer {}: non-linear layer\n", .{i + 1}),
+            }
         }
     }
 
@@ -101,3 +110,4 @@ pub fn main() !void {
     std.debug.print("✓ Operations automatically recorded to tape!\n", .{});
     std.debug.print("✓ Backward pass automatically computes gradients!\n\n", .{});
 }
+

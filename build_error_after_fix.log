@@ -1,0 +1,26 @@
+test
++- run test
+   +- compile test Debug native 1 errors
+src\layers.zig:270:9: error: expected statement, found 'a document comment'
+        ///TODO check isinstance(layer) else raise typer error
+        ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\Thomas\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" test -ODebug --dep modelwork2 "-Mroot=C:\\Users\\Thomas\\sigwork\\tests\\Modelrunt.zig" -ODebug "-Mmodelwork2=C:\\Users\\Thomas\\sigwork\\src\\lib.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\Thomas\\AppData\\Local\\zig" --name test --zig-lib-dir "C:\\Users\\Thomas\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+test
++- run test
+   +- compile test Debug native 1 errors
+src\layers.zig:270:9: error: expected statement, found 'a document comment'
+        ///TODO check isinstance(layer) else raise typer error
+        ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\Thomas\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" test -ODebug --dep modelwork2 "-Mroot=C:\\Users\\Thomas\\sigwork\\tests\\framework_tests.zig" -ODebug "-Mmodelwork2=C:\\Users\\Thomas\\sigwork\\src\\lib.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\Thomas\\AppData\\Local\\zig" --name test --zig-lib-dir "C:\\Users\\Thomas\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+
+Build Summary: 0/5 steps succeeded; 2 failed
+test transitive failure
++- run test transitive failure
+|  +- compile test Debug native 1 errors
++- run test transitive failure
+   +- compile test Debug native 1 errors
+
+error: the following build command failed with exit code 1:
+.zig-cache\o\4b71efc36d15fdf7cf3c63372ee33d6d\build.exe C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\zig.exe C:\Users\Thomas\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib C:\Users\Thomas\sigwork .zig-cache C:\Users\Thomas\AppData\Local\zig --seed 0x4aac415a -Z34ca2d00401df76a test
