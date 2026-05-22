@@ -283,7 +283,7 @@ test "section 3 composition and introspection features" {
     defer branch1.deinit();
     var branch2 = try lib.layers.LinearLayer.init(allocator, 5, 3, "relu", null, null);
     defer branch2.deinit();
-    var branched = try lib.layers.branchForward(allocator, &seq_in, &[_]*lib.layers.LinearLayer{ &branch1, &branch2 });
+    var branched = try lib.layers.branchForward(allocator, &seq_in, &[_]*lib.layers.LinearLayer{ branch1, branch2 });
     defer branched.deinit();
     try std.testing.expectEqualSlices(usize, &[_]usize{ 2, 5 }, branched.shape.?.items);
 
@@ -299,13 +299,13 @@ test "section 3 composition and introspection features" {
     defer inc_out.deinit();
     try std.testing.expectEqualSlices(usize, &[_]usize{ 2, 8 }, inc_out.shape.?.items);
 
-    const linear_stats = lib.layers.linearLayerStats(&branch1);
+    const linear_stats = lib.layers.linearLayerStats(branch1);
     try std.testing.expectEqualStrings("LinearLayer", linear_stats.name);
     try std.testing.expect(linear_stats.parameter_count > 0);
 
     var conv2d = try lib.layers.Conv2DLayer.init(allocator, 1, 2, 3, 3, 1, 1, null, null);
     defer conv2d.deinit();
-    const conv_stats = lib.layers.conv2dLayerStats(&conv2d);
+    const conv_stats = lib.layers.conv2dLayerStats(conv2d);
     try std.testing.expectEqualStrings("Conv2DLayer", conv_stats.name);
     try std.testing.expect(conv_stats.parameter_count > 0);
 }

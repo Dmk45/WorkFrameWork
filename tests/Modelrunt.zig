@@ -86,12 +86,12 @@ pub const EnergyLoadForecaster = struct {
 
     fn lstmLayer(self: *EnergyLoadForecaster) *layers.LSTMLayer {
         const layer = self.nn.get_layer(0) orelse unreachable;
-        return &layer.lstm;
+        return layers.Layer.child(layers.LSTMLayer, layer);
     }
 
     fn linearLayer(self: *EnergyLoadForecaster, idx: usize) *layers.LinearLayer {
         const layer = self.nn.get_layer(idx) orelse unreachable;
-        return &layer.linear;
+        return layers.Layer.child(layers.LinearLayer, layer);
     }
 
     /// Forward: sequence of [batch, features] → [batch, 1] predicted load.
@@ -124,14 +124,15 @@ pub const EnergyLoadForecaster = struct {
         return output;
     }
 
-    fn accumulateBiasGrad(d_output: *trix.DataObject, bias: *trix.DataObject) !void {
+    fn accumulateBiasGrad(d_output: *const trix.DataObject, bias: *trix.DataObject) !void {
         try bias.ensureGradValue();
         const batch = d_output.shape.?.items[0];
         const out_dim = d_output.shape.?.items[1];
+        const grads = if (d_output.grad_value) |g| g.items else d_output.values.items;
         for (0..out_dim) |j| {
             var acc: f32 = 0.0;
             for (0..batch) |b| {
-                acc += d_output.grad_value.?.items[b * out_dim + j];
+                acc += grads[b * out_dim + j];
             }
             bias.grad_value.?.items[j] += acc;
         }
@@ -139,12 +140,16 @@ pub const EnergyLoadForecaster = struct {
 
     /// Propagate MSE gradients into linear readout weights/bias using cached activations.
     fn accumulateReadoutGrads(self: *EnergyLoadForecaster, allocator: std.mem.Allocator, d_output: *trix.DataObject) !void {
-        const h1_cache = &self.hidden1.?.*;
-        const lstm_cache = &self.lstm_encoding.?.*;
+        const h1_cache = &self.hidden1.?;
+        const lstm_cache = &self.lstm_encoding.?;
 
         var d_loss = try trix.DataObject.init(allocator, d_output.shape.?.items, .f32);
         defer d_loss.deinit();
+        try d_output.ensureGradValue();
         @memcpy(d_loss.values.items, d_output.grad_value.?.items);
+        d_loss.enableGrad();
+        try d_loss.ensureGradValue();
+        @memcpy(d_loss.grad_value.?.items, d_output.grad_value.?.items);
 
         const linear2 = self.linearLayer(2);
         try grad_math.matmulBackward(h1_cache, &linear2.weights, &d_loss, allocator);
@@ -156,14 +161,15 @@ pub const EnergyLoadForecaster = struct {
         defer d_h1.deinit();
 
         const linear1 = self.linearLayer(1);
-        var d_lstm = d_h1;
+        var d_lstm = try trix.DataObject.init(allocator, d_h1.shape.?.items, .f32);
+        defer d_lstm.deinit();
+        @memcpy(d_lstm.values.items, d_h1.values.items);
+
         if (std.mem.eql(u8, linear1.config.activation, "relu")) {
             h1_cache.enableGrad();
             try h1_cache.ensureGradValue();
             @memset(h1_cache.grad_value.?.items, 0.0);
             try grad_math.reluBackward(h1_cache, &d_h1);
-            d_lstm = try trix.DataObject.init(allocator, h1_cache.shape.?.items, .f32);
-            defer d_lstm.deinit();
             @memcpy(d_lstm.values.items, h1_cache.grad_value.?.items);
         }
 
@@ -194,15 +200,7 @@ pub const EnergyLoadForecaster = struct {
         try self.accumulateReadoutGrads(allocator, &prediction);
 
         if (self.cfg.grad_clip_norm > 0) {
-            for (self.nn.layers.items) |*layer| {
-                switch (layer.*) {
-                    .linear => |*l| {
-                        grad.clipGradientsByNorm(&l.weights, self.cfg.grad_clip_norm);
-                        grad.clipGradientsByNorm(&l.bias, self.cfg.grad_clip_norm);
-                    },
-                    else => {},
-                }
-            }
+            self.nn.clip_gradients(self.cfg.grad_clip_norm);
         }
 
         try self.nn.update_parameters(optimizer);

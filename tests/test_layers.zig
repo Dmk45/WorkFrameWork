@@ -96,13 +96,11 @@ pub fn main() !void {
     std.debug.print("Final model structure:\n", .{});
     for (0..nn.num_layers()) |i| {
         if (nn.get_layer(i)) |layer| {
-            switch (layer.*) {
-                .linear => |*linear| std.debug.print(
-                    "  Layer {}: {s} - weights shape: {any}\n",
-                    .{ i + 1, linear.config.activation, linear.weights.shape.?.items },
-                ),
-                else => std.debug.print("  Layer {}: non-linear layer\n", .{i + 1}),
-            }
+            const linear = layers_mod.Layer.child(layers_mod.LinearLayer, layer);
+            std.debug.print(
+                "  Layer {}: {s} - weights shape: {any}\n",
+                .{ i + 1, linear.config.activation, linear.weights.shape.?.items },
+            );
         }
     }
 

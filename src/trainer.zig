@@ -89,27 +89,7 @@ pub const Trainer = struct {
         defer pred.deinit();
         const loss = try grad.meanSquaredError(&pred, y);
         if (self.config.clip_grad_norm) |max_norm| {
-            for (self.model.layers.items) |*layer| {
-                switch(layer.*) {
-                    .linear => |*l| {
-                        grad.clipGradientsByNorm(&l.weights, max_norm);
-                        grad.clipGradientsByNorm(&l.bias, max_norm);
-                    },
-                    .conv1d => |*l| {
-                        grad.clipGradientsByNorm(&l.weights, max_norm);
-                        grad.clipGradientsByNorm(&l.bias, max_norm);
-                    },
-                    .conv2d => |*l| {
-                        grad.clipGradientsByNorm(&l.weights, max_norm);
-                        grad.clipGradientsByNorm(&l.bias, max_norm);
-                    },
-                    .conv3d => |*l| {
-                        grad.clipGradientsByNorm(&l.weights, max_norm);
-                        grad.clipGradientsByNorm(&l.bias, max_norm);
-                    },
-                    else => {},
-                }
-            }
+            self.model.clip_gradients(max_norm);
         }
         try self.model.update_parameters(self.optimizer);
         return loss;

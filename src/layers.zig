@@ -90,27 +90,106 @@ fn defaultLinearBackprop(layer_ptr: *anyopaque, allocator: std.mem.Allocator, gr
     return grad_input;
 }
 
-/// Layer type enum for the union
-pub const LayerType = enum {
-    linear,
-    conv1d,
-    conv2d,
-    conv3d,
-    lstm,
-    lstm_cell,
-    gru_cell,
-};
+pub const DeinitFn = *const fn (layer: *anyopaque) void;
+pub const ZeroGradFn = *const fn (layer: *anyopaque) void;
+pub const UpdateFn = *const fn (layer: *anyopaque, optimizer: *grad_mod.Adam) anyerror!void;
+pub const ClipGradFn = *const fn (layer: *anyopaque, norm: f32) void;
 
-/// Common fields shared by all layer implementations
-pub const LayerBase = struct {
-    tag: LayerType,
+/// Parent layer handle. `type` points at the concrete child (which embeds this as `.layer`).
+pub const Layer = struct {
+    type: *anyopaque,
     forward_fn: ForwardFn,
     backprop_fn: BackpropFn,
+    deinit_fn: DeinitFn,
+    zero_grad_fn: ZeroGradFn,
+    update_fn: ?UpdateFn = null,
+    clip_grad_fn: ?ClipGradFn = null,
+
+    pub fn forward(self: *Layer, allocator: std.mem.Allocator, input: *trix.DataObject) !trix.DataObject {
+        return self.forward_fn(self.type, allocator, input);
+    }
+
+    pub fn backprop(self: *Layer, allocator: std.mem.Allocator, grad_output: *trix.DataObject) !trix.DataObject {
+        return self.backprop_fn(self.type, allocator, grad_output);
+    }
+
+    pub fn deinit(self: *Layer) void {
+        self.deinit_fn(self.type);
+    }
+
+    pub fn zero_grad(self: *Layer) void {
+        self.zero_grad_fn(self.type);
+    }
+
+    pub fn update(self: *Layer, optimizer: *grad_mod.Adam) !void {
+        if (self.update_fn) |ufn| try ufn(self.type, optimizer);
+    }
+
+    pub fn clip_gradients(self: *Layer, norm: f32) void {
+        if (self.clip_grad_fn) |cfn| cfn(self.type, norm);
+    }
+
+    pub fn setForwardFn(self: *Layer, fn_ptr: ForwardFn) void {
+        self.forward_fn = fn_ptr;
+    }
+
+    pub fn setBackpropFn(self: *Layer, fn_ptr: BackpropFn) void {
+        self.backprop_fn = fn_ptr;
+    }
+
+    pub fn child(comptime T: type, self: *const Layer) *T {
+        return @ptrCast(@alignCast(self.type));
+    }
 };
 
-/// Linear layer state
+pub fn wireLayer(
+    layer: *Layer,
+    child: *anyopaque,
+    forward_fn: ForwardFn,
+    backprop_fn: BackpropFn,
+    deinit_fn: DeinitFn,
+    zero_grad_fn: ZeroGradFn,
+    update_fn: ?UpdateFn,
+    clip_grad_fn: ?ClipGradFn,
+) void {
+    layer.type = child;
+    layer.forward_fn = forward_fn;
+    layer.backprop_fn = backprop_fn;
+    layer.deinit_fn = deinit_fn;
+    layer.zero_grad_fn = zero_grad_fn;
+    layer.update_fn = update_fn;
+    layer.clip_grad_fn = clip_grad_fn;
+}
+
+fn deinitLinear(layer_ptr: *anyopaque) void {
+    const self: *LinearLayer = @ptrCast(@alignCast(layer_ptr));
+    self.weights.deinit();
+    self.bias.deinit();
+    self.allocator.destroy(self);
+}
+
+fn zeroGradLinear(layer_ptr: *anyopaque) void {
+    const self: *LinearLayer = @ptrCast(@alignCast(layer_ptr));
+    if (self.weights.grad_value) |*g| @memset(g.items, 0.0);
+    if (self.bias.grad_value) |*g| @memset(g.items, 0.0);
+}
+
+fn updateLinear(layer_ptr: *anyopaque, optimizer: *grad_mod.Adam) !void {
+    const self: *LinearLayer = @ptrCast(@alignCast(layer_ptr));
+    if (self.weights.grad_value) |_| try optimizer.step(&self.weights);
+    if (self.bias.grad_value) |_| try optimizer.step(&self.bias);
+}
+
+fn clipGradLinear(layer_ptr: *anyopaque, norm: f32) void {
+    const self: *LinearLayer = @ptrCast(@alignCast(layer_ptr));
+    grad_mod.clipGradientsByNorm(&self.weights, norm);
+    grad_mod.clipGradientsByNorm(&self.bias, norm);
+}
+
+/// Linear layer state (embeds parent `Layer`; registered with the network via `nn.add`)
 pub const LinearLayer = struct {
-    base: LayerBase,
+    layer: Layer,
+    allocator: std.mem.Allocator,
     config: LayerConfig,
     weights: trix.DataObject,
     bias: trix.DataObject,
@@ -122,7 +201,7 @@ pub const LinearLayer = struct {
         activation: []const u8,
         forward_fn: ?ForwardFn,
         backprop_fn: ?BackpropFn,
-    ) !LinearLayer {
+    ) !*LinearLayer {
         var weights = try trix.DataObject.init(allocator, &[_]usize{ input_size, output_size }, .f32);
         var bias = try trix.DataObject.init(allocator, &[_]usize{output_size}, .f32);
 
@@ -144,12 +223,10 @@ pub const LinearLayer = struct {
         try weights.ensureGradValue();
         try bias.ensureGradValue();
 
-        const layer = LinearLayer{
-            .base = .{
-                .tag = .linear,
-                .forward_fn = forward_fn orelse defaultLinearForward,
-                .backprop_fn = backprop_fn orelse defaultLinearBackprop,
-            },
+        const self = try allocator.create(LinearLayer);
+        self.* = .{
+            .layer = undefined,
+            .allocator = allocator,
             .config = LayerConfig{
                 .input_size = input_size,
                 .output_size = output_size,
@@ -158,36 +235,33 @@ pub const LinearLayer = struct {
             .weights = weights,
             .bias = bias,
         };
-        return layer;
+        wireLayer(
+            &self.layer,
+            self,
+            forward_fn orelse defaultLinearForward,
+            backprop_fn orelse defaultLinearBackprop,
+            deinitLinear,
+            zeroGradLinear,
+            updateLinear,
+            clipGradLinear,
+        );
+        return self;
     }
 
-    /// Union wrapper for network storage (see `wrapLayer`)
-    pub fn asLayer(self: LinearLayer) Layer {
-        return .{ .linear = self };
-    }
-
-    /// Forward pass using the configured forward function
     pub fn forward(self: *LinearLayer, allocator: std.mem.Allocator, input: *trix.DataObject) !trix.DataObject {
-        return self.base.forward_fn(self, allocator, input);
+        return self.layer.forward(allocator, input);
     }
 
-    /// Backprop using the configured backprop function
     pub fn backprop(self: *LinearLayer, allocator: std.mem.Allocator, grad_output: *trix.DataObject) !trix.DataObject {
-        return self.base.backprop_fn(self, allocator, grad_output);
+        return self.layer.backprop(allocator, grad_output);
     }
 
     pub fn deinit(self: *LinearLayer) void {
-        self.weights.deinit();
-        self.bias.deinit();
+        self.layer.deinit();
     }
 
     pub fn zero_grad(self: *LinearLayer) void {
-        if (self.weights.grad_value) |*g| {
-            @memset(g.items, 0.0);
-        }
-        if (self.bias.grad_value) |*g| {
-            @memset(g.items, 0.0);
-        }
+        self.layer.zero_grad();
     }
 
     pub fn get_weights(self: *LinearLayer) *trix.DataObject {
@@ -243,8 +317,21 @@ fn defaultConv1DBackprop(layer_ptr: *anyopaque, allocator: std.mem.Allocator, gr
     return grad_copy;
 }
 
+fn deinitConv1D(layer_ptr: *anyopaque) void {
+    const self: *Conv1DLayer = @ptrCast(@alignCast(layer_ptr));
+    self.weights.deinit();
+    self.bias.deinit();
+    self.allocator.destroy(self);
+}
+
+fn zeroGradConv1D(layer_ptr: *anyopaque) void {
+    const self: *Conv1DLayer = @ptrCast(@alignCast(layer_ptr));
+    if (self.weights.grad_value) |*g| @memset(g.items, 0.0);
+    if (self.bias.grad_value) |*g| @memset(g.items, 0.0);
+}
+
 pub const Conv1DLayer = struct {
-    base: LayerBase,
+    layer: Layer,
     allocator: std.mem.Allocator,
     in_channels: usize,
     out_channels: usize,
@@ -254,17 +341,14 @@ pub const Conv1DLayer = struct {
     weights: trix.DataObject, // [out_channels, in_channels, kernel_size]
     bias: trix.DataObject, // [out_channels]
 
-    pub fn init(allocator: std.mem.Allocator, in_channels: usize, out_channels: usize, kernel_size: usize, stride: usize, padding: usize, forward_fn: ?ForwardFn, backprop_fn: ?BackpropFn) !Conv1DLayer {
+    pub fn init(allocator: std.mem.Allocator, in_channels: usize, out_channels: usize, kernel_size: usize, stride: usize, padding: usize, forward_fn: ?ForwardFn, backprop_fn: ?BackpropFn) !*Conv1DLayer {
         const weights = try trix.DataObject.init(allocator, &[_]usize{ out_channels, in_channels, kernel_size }, .f32);
         const bias = try trix.DataObject.init(allocator, &[_]usize{out_channels}, .f32);
         for (weights.values.items) |*v| v.* = 0.01;
         for (bias.values.items) |*v| v.* = 0.0;
-        const layer = Conv1DLayer{
-            .base = .{
-                .tag = .conv1d,
-                .forward_fn = forward_fn orelse defaultConv1DForward,
-                .backprop_fn = backprop_fn orelse defaultConv1DBackprop,
-            },
+        const self = try allocator.create(Conv1DLayer);
+        self.* = .{
+            .layer = undefined,
             .allocator = allocator,
             .in_channels = in_channels,
             .out_channels = out_channels,
@@ -274,29 +358,33 @@ pub const Conv1DLayer = struct {
             .weights = weights,
             .bias = bias,
         };
-        return layer;
-    }
-
-    pub fn asLayer(self: Conv1DLayer) Layer {
-        return .{ .conv1d = self };
+        wireLayer(
+            &self.layer,
+            self,
+            forward_fn orelse defaultConv1DForward,
+            backprop_fn orelse defaultConv1DBackprop,
+            deinitConv1D,
+            zeroGradConv1D,
+            null,
+            null,
+        );
+        return self;
     }
 
     pub fn forward(self: *Conv1DLayer, allocator: std.mem.Allocator, input: *trix.DataObject) !trix.DataObject {
-        return self.base.forward_fn(self, allocator, input);
+        return self.layer.forward(allocator, input);
     }
 
     pub fn backprop(self: *Conv1DLayer, allocator: std.mem.Allocator, grad_output: *trix.DataObject) !trix.DataObject {
-        return self.base.backprop_fn(self, allocator, grad_output);
+        return self.layer.backprop(allocator, grad_output);
     }
 
     pub fn deinit(self: *Conv1DLayer) void {
-        self.weights.deinit();
-        self.bias.deinit();
+        self.layer.deinit();
     }
 
     pub fn zero_grad(self: *Conv1DLayer) void {
-        if (self.weights.grad_value) |*g| @memset(g.items, 0.0);
-        if (self.bias.grad_value) |*g| @memset(g.items, 0.0);
+        self.layer.zero_grad();
     }
 };
 
@@ -354,8 +442,21 @@ fn defaultConv2DBackprop(layer_ptr: *anyopaque, allocator: std.mem.Allocator, gr
     return grad_copy;
 }
 
+fn deinitConv2D(layer_ptr: *anyopaque) void {
+    const self: *Conv2DLayer = @ptrCast(@alignCast(layer_ptr));
+    self.weights.deinit();
+    self.bias.deinit();
+    self.allocator.destroy(self);
+}
+
+fn zeroGradConv2D(layer_ptr: *anyopaque) void {
+    const self: *Conv2DLayer = @ptrCast(@alignCast(layer_ptr));
+    if (self.weights.grad_value) |*g| @memset(g.items, 0.0);
+    if (self.bias.grad_value) |*g| @memset(g.items, 0.0);
+}
+
 pub const Conv2DLayer = struct {
-    base: LayerBase,
+    layer: Layer,
     allocator: std.mem.Allocator,
     in_channels: usize,
     out_channels: usize,
@@ -366,17 +467,14 @@ pub const Conv2DLayer = struct {
     weights: trix.DataObject, // [out_channels, in_channels, kh, kw]
     bias: trix.DataObject, // [out_channels]
 
-    pub fn init(allocator: std.mem.Allocator, in_channels: usize, out_channels: usize, kernel_h: usize, kernel_w: usize, stride: usize, padding: usize, forward_fn: ?ForwardFn, backprop_fn: ?BackpropFn) !Conv2DLayer {
+    pub fn init(allocator: std.mem.Allocator, in_channels: usize, out_channels: usize, kernel_h: usize, kernel_w: usize, stride: usize, padding: usize, forward_fn: ?ForwardFn, backprop_fn: ?BackpropFn) !*Conv2DLayer {
         const weights = try trix.DataObject.init(allocator, &[_]usize{ out_channels, in_channels, kernel_h, kernel_w }, .f32);
         const bias = try trix.DataObject.init(allocator, &[_]usize{out_channels}, .f32);
         for (weights.values.items) |*v| v.* = 0.01;
         for (bias.values.items) |*v| v.* = 0.0;
-        const layer = Conv2DLayer{
-            .base = .{
-                .tag = .conv2d,
-                .forward_fn = forward_fn orelse defaultConv2DForward,
-                .backprop_fn = backprop_fn orelse defaultConv2DBackprop,
-            },
+        const self = try allocator.create(Conv2DLayer);
+        self.* = .{
+            .layer = undefined,
             .allocator = allocator,
             .in_channels = in_channels,
             .out_channels = out_channels,
@@ -387,29 +485,33 @@ pub const Conv2DLayer = struct {
             .weights = weights,
             .bias = bias,
         };
-        return layer;
-    }
-
-    pub fn asLayer(self: Conv2DLayer) Layer {
-        return .{ .conv2d = self };
+        wireLayer(
+            &self.layer,
+            self,
+            forward_fn orelse defaultConv2DForward,
+            backprop_fn orelse defaultConv2DBackprop,
+            deinitConv2D,
+            zeroGradConv2D,
+            null,
+            null,
+        );
+        return self;
     }
 
     pub fn forward(self: *Conv2DLayer, allocator: std.mem.Allocator, input: *trix.DataObject) !trix.DataObject {
-        return self.base.forward_fn(self, allocator, input);
+        return self.layer.forward(allocator, input);
     }
 
     pub fn backprop(self: *Conv2DLayer, allocator: std.mem.Allocator, grad_output: *trix.DataObject) !trix.DataObject {
-        return self.base.backprop_fn(self, allocator, grad_output);
+        return self.layer.backprop(allocator, grad_output);
     }
 
     pub fn deinit(self: *Conv2DLayer) void {
-        self.weights.deinit();
-        self.bias.deinit();
+        self.layer.deinit();
     }
 
     pub fn zero_grad(self: *Conv2DLayer) void {
-        if (self.weights.grad_value) |*g| @memset(g.items, 0.0);
-        if (self.bias.grad_value) |*g| @memset(g.items, 0.0);
+        self.layer.zero_grad();
     }
 };
 
@@ -478,8 +580,21 @@ fn defaultConv3DBackprop(layer_ptr: *anyopaque, allocator: std.mem.Allocator, gr
     return grad_copy;
 }
 
+fn deinitConv3D(layer_ptr: *anyopaque) void {
+    const self: *Conv3DLayer = @ptrCast(@alignCast(layer_ptr));
+    self.weights.deinit();
+    self.bias.deinit();
+    self.allocator.destroy(self);
+}
+
+fn zeroGradConv3D(layer_ptr: *anyopaque) void {
+    const self: *Conv3DLayer = @ptrCast(@alignCast(layer_ptr));
+    if (self.weights.grad_value) |*g| @memset(g.items, 0.0);
+    if (self.bias.grad_value) |*g| @memset(g.items, 0.0);
+}
+
 pub const Conv3DLayer = struct {
-    base: LayerBase,
+    layer: Layer,
     allocator: std.mem.Allocator,
     in_channels: usize,
     out_channels: usize,
@@ -491,17 +606,14 @@ pub const Conv3DLayer = struct {
     weights: trix.DataObject, // [out_channels, in_channels, kd, kh, kw]
     bias: trix.DataObject, // [out_channels]
 
-    pub fn init(allocator: std.mem.Allocator, in_channels: usize, out_channels: usize, kernel_d: usize, kernel_h: usize, kernel_w: usize, stride: usize, padding: usize, forward_fn: ?ForwardFn, backprop_fn: ?BackpropFn) !Conv3DLayer {
+    pub fn init(allocator: std.mem.Allocator, in_channels: usize, out_channels: usize, kernel_d: usize, kernel_h: usize, kernel_w: usize, stride: usize, padding: usize, forward_fn: ?ForwardFn, backprop_fn: ?BackpropFn) !*Conv3DLayer {
         const weights = try trix.DataObject.init(allocator, &[_]usize{ out_channels, in_channels, kernel_d, kernel_h, kernel_w }, .f32);
         const bias = try trix.DataObject.init(allocator, &[_]usize{out_channels}, .f32);
         for (weights.values.items) |*v| v.* = 0.01;
         for (bias.values.items) |*v| v.* = 0.0;
-        const layer = Conv3DLayer{
-            .base = .{
-                .tag = .conv3d,
-                .forward_fn = forward_fn orelse defaultConv3DForward,
-                .backprop_fn = backprop_fn orelse defaultConv3DBackprop,
-            },
+        const self = try allocator.create(Conv3DLayer);
+        self.* = .{
+            .layer = undefined,
             .allocator = allocator,
             .in_channels = in_channels,
             .out_channels = out_channels,
@@ -513,29 +625,33 @@ pub const Conv3DLayer = struct {
             .weights = weights,
             .bias = bias,
         };
-        return layer;
-    }
-
-    pub fn asLayer(self: Conv3DLayer) Layer {
-        return .{ .conv3d = self };
+        wireLayer(
+            &self.layer,
+            self,
+            forward_fn orelse defaultConv3DForward,
+            backprop_fn orelse defaultConv3DBackprop,
+            deinitConv3D,
+            zeroGradConv3D,
+            null,
+            null,
+        );
+        return self;
     }
 
     pub fn forward(self: *Conv3DLayer, allocator: std.mem.Allocator, input: *trix.DataObject) !trix.DataObject {
-        return self.base.forward_fn(self, allocator, input);
+        return self.layer.forward(allocator, input);
     }
 
     pub fn backprop(self: *Conv3DLayer, allocator: std.mem.Allocator, grad_output: *trix.DataObject) !trix.DataObject {
-        return self.base.backprop_fn(self, allocator, grad_output);
+        return self.layer.backprop(allocator, grad_output);
     }
 
     pub fn deinit(self: *Conv3DLayer) void {
-        self.weights.deinit();
-        self.bias.deinit();
+        self.layer.deinit();
     }
 
     pub fn zero_grad(self: *Conv3DLayer) void {
-        if (self.weights.grad_value) |*g| @memset(g.items, 0.0);
-        if (self.bias.grad_value) |*g| @memset(g.items, 0.0);
+        self.layer.zero_grad();
     }
 };
 
@@ -727,6 +843,20 @@ fn defaultLSTMCellForward(layer_ptr: *anyopaque, allocator: std.mem.Allocator, x
     return .{ .h = h, .c = c };
 }
 
+/// Network-level forward for LSTMCell (zero initial h/c)
+fn defaultLSTMCellForwardWrapped(layer_ptr: *anyopaque, allocator: std.mem.Allocator, input: *trix.DataObject) !trix.DataObject {
+    const self: *LSTMCell = @ptrCast(@alignCast(layer_ptr));
+    const batch = input.shape.?.items[0];
+    var h = try trix.DataObject.init(allocator, &[_]usize{ batch, self.hidden_size }, .f32);
+    @memset(h.values.items, 0.0);
+    var c = try trix.DataObject.init(allocator, &[_]usize{ batch, self.hidden_size }, .f32);
+    @memset(c.values.items, 0.0);
+    defer h.deinit();
+    defer c.deinit();
+    const result = try self.forward(allocator, input, &h, &c);
+    return result.h;
+}
+
 /// Default LSTMCell backprop (placeholder)
 fn defaultLSTMCellBackprop(layer_ptr: *anyopaque, allocator: std.mem.Allocator, grad_output: *trix.DataObject) !trix.DataObject {
     _ = layer_ptr;
@@ -735,60 +865,76 @@ fn defaultLSTMCellBackprop(layer_ptr: *anyopaque, allocator: std.mem.Allocator, 
     return grad_copy;
 }
 
+fn deinitLSTMCell(layer_ptr: *anyopaque) void {
+    const self: *LSTMCell = @ptrCast(@alignCast(layer_ptr));
+    self.w_ih.deinit();
+    self.w_hh.deinit();
+    self.bias.deinit();
+    self.allocator.destroy(self);
+}
+
+fn zeroGradLSTMCell(layer_ptr: *anyopaque) void {
+    const self: *LSTMCell = @ptrCast(@alignCast(layer_ptr));
+    if (self.w_ih.grad_value) |*g| @memset(g.items, 0.0);
+    if (self.w_hh.grad_value) |*g| @memset(g.items, 0.0);
+    if (self.bias.grad_value) |*g| @memset(g.items, 0.0);
+}
+
 pub const LSTMCell = struct {
-    base: LayerBase,
+    layer: Layer,
+    allocator: std.mem.Allocator,
     input_size: usize,
     hidden_size: usize,
     w_ih: trix.DataObject, // [input_size, 4*hidden]
     w_hh: trix.DataObject, // [hidden, 4*hidden]
     bias: trix.DataObject, // [4*hidden]
-    forward_fn: LSTMCellForwardFn,
+    cell_forward_fn: LSTMCellForwardFn,
 
-    pub fn init(allocator: std.mem.Allocator, input_size: usize, hidden_size: usize, forward_fn: ?LSTMCellForwardFn, backprop_fn: ?BackpropFn) !LSTMCell {
+    pub fn init(allocator: std.mem.Allocator, input_size: usize, hidden_size: usize, cell_forward_fn: ?LSTMCellForwardFn, backprop_fn: ?BackpropFn) !*LSTMCell {
         const w_ih = try trix.DataObject.init(allocator, &[_]usize{ input_size, 4 * hidden_size }, .f32);
         const w_hh = try trix.DataObject.init(allocator, &[_]usize{ hidden_size, 4 * hidden_size }, .f32);
         const bias = try trix.DataObject.init(allocator, &[_]usize{4 * hidden_size}, .f32);
         for (w_ih.values.items) |*v| v.* = 0.01;
         for (w_hh.values.items) |*v| v.* = 0.01;
         for (bias.values.items) |*v| v.* = 0.0;
-        const layer = LSTMCell{
-            .base = .{
-                .tag = .lstm_cell,
-                .forward_fn = undefined,
-                .backprop_fn = backprop_fn orelse defaultLSTMCellBackprop,
-            },
+        const self = try allocator.create(LSTMCell);
+        self.* = .{
+            .layer = undefined,
+            .allocator = allocator,
             .input_size = input_size,
             .hidden_size = hidden_size,
             .w_ih = w_ih,
             .w_hh = w_hh,
             .bias = bias,
-            .forward_fn = forward_fn orelse defaultLSTMCellForward,
+            .cell_forward_fn = cell_forward_fn orelse defaultLSTMCellForward,
         };
-        return layer;
-    }
-
-    pub fn asLayer(self: LSTMCell) Layer {
-        return .{ .lstm_cell = self };
+        wireLayer(
+            &self.layer,
+            self,
+            defaultLSTMCellForwardWrapped,
+            backprop_fn orelse defaultLSTMCellBackprop,
+            deinitLSTMCell,
+            zeroGradLSTMCell,
+            null,
+            null,
+        );
+        return self;
     }
 
     pub fn forward(self: *LSTMCell, allocator: std.mem.Allocator, x: *trix.DataObject, h_prev: *trix.DataObject, c_prev: *trix.DataObject) !LSTMCellForwardResult {
-        return self.forward_fn(self, allocator, x, h_prev, c_prev);
+        return self.cell_forward_fn(self, allocator, x, h_prev, c_prev);
     }
 
     pub fn backprop(self: *LSTMCell, allocator: std.mem.Allocator, grad_output: *trix.DataObject) !trix.DataObject {
-        return self.base.backprop_fn(self, allocator, grad_output);
+        return self.layer.backprop(allocator, grad_output);
     }
 
     pub fn deinit(self: *LSTMCell) void {
-        self.w_ih.deinit();
-        self.w_hh.deinit();
-        self.bias.deinit();
+        self.layer.deinit();
     }
 
     pub fn zero_grad(self: *LSTMCell) void {
-        if (self.w_ih.grad_value) |*g| @memset(g.items, 0.0);
-        if (self.w_hh.grad_value) |*g| @memset(g.items, 0.0);
-        if (self.bias.grad_value) |*g| @memset(g.items, 0.0);
+        self.layer.zero_grad();
     }
 };
 
@@ -824,6 +970,16 @@ fn defaultGRUCellForward(layer_ptr: *anyopaque, allocator: std.mem.Allocator, x:
     return h;
 }
 
+/// Network-level forward for GRUCell (zero initial hidden state)
+fn defaultGRUCellForwardWrapped(layer_ptr: *anyopaque, allocator: std.mem.Allocator, input: *trix.DataObject) !trix.DataObject {
+    const self: *GRUCell = @ptrCast(@alignCast(layer_ptr));
+    const batch = input.shape.?.items[0];
+    var h = try trix.DataObject.init(allocator, &[_]usize{ batch, self.hidden_size }, .f32);
+    @memset(h.values.items, 0.0);
+    defer h.deinit();
+    return self.forward(allocator, input, &h);
+}
+
 /// Default GRUCell backprop (placeholder)
 fn defaultGRUCellBackprop(layer_ptr: *anyopaque, allocator: std.mem.Allocator, grad_output: *trix.DataObject) !trix.DataObject {
     _ = layer_ptr;
@@ -832,60 +988,76 @@ fn defaultGRUCellBackprop(layer_ptr: *anyopaque, allocator: std.mem.Allocator, g
     return grad_copy;
 }
 
+fn deinitGRUCell(layer_ptr: *anyopaque) void {
+    const self: *GRUCell = @ptrCast(@alignCast(layer_ptr));
+    self.w_ih.deinit();
+    self.w_hh.deinit();
+    self.bias.deinit();
+    self.allocator.destroy(self);
+}
+
+fn zeroGradGRUCell(layer_ptr: *anyopaque) void {
+    const self: *GRUCell = @ptrCast(@alignCast(layer_ptr));
+    if (self.w_ih.grad_value) |*g| @memset(g.items, 0.0);
+    if (self.w_hh.grad_value) |*g| @memset(g.items, 0.0);
+    if (self.bias.grad_value) |*g| @memset(g.items, 0.0);
+}
+
 pub const GRUCell = struct {
-    base: LayerBase,
+    layer: Layer,
+    allocator: std.mem.Allocator,
     input_size: usize,
     hidden_size: usize,
     w_ih: trix.DataObject, // [input, 3*hidden]
     w_hh: trix.DataObject, // [hidden, 3*hidden]
     bias: trix.DataObject, // [3*hidden]
-    forward_fn: GRUCellForwardFn,
+    cell_forward_fn: GRUCellForwardFn,
 
-    pub fn init(allocator: std.mem.Allocator, input_size: usize, hidden_size: usize, forward_fn: ?GRUCellForwardFn, backprop_fn: ?BackpropFn) !GRUCell {
+    pub fn init(allocator: std.mem.Allocator, input_size: usize, hidden_size: usize, cell_forward_fn: ?GRUCellForwardFn, backprop_fn: ?BackpropFn) !*GRUCell {
         const w_ih = try trix.DataObject.init(allocator, &[_]usize{ input_size, 3 * hidden_size }, .f32);
         const w_hh = try trix.DataObject.init(allocator, &[_]usize{ hidden_size, 3 * hidden_size }, .f32);
         const bias = try trix.DataObject.init(allocator, &[_]usize{3 * hidden_size}, .f32);
         for (w_ih.values.items) |*v| v.* = 0.01;
         for (w_hh.values.items) |*v| v.* = 0.01;
         for (bias.values.items) |*v| v.* = 0.0;
-        const layer = GRUCell{
-            .base = .{
-                .tag = .gru_cell,
-                .forward_fn = undefined,
-                .backprop_fn = backprop_fn orelse defaultGRUCellBackprop,
-            },
+        const self = try allocator.create(GRUCell);
+        self.* = .{
+            .layer = undefined,
+            .allocator = allocator,
             .input_size = input_size,
             .hidden_size = hidden_size,
             .w_ih = w_ih,
             .w_hh = w_hh,
             .bias = bias,
-            .forward_fn = forward_fn orelse defaultGRUCellForward,
+            .cell_forward_fn = cell_forward_fn orelse defaultGRUCellForward,
         };
-        return layer;
-    }
-
-    pub fn asLayer(self: GRUCell) Layer {
-        return .{ .gru_cell = self };
+        wireLayer(
+            &self.layer,
+            self,
+            defaultGRUCellForwardWrapped,
+            backprop_fn orelse defaultGRUCellBackprop,
+            deinitGRUCell,
+            zeroGradGRUCell,
+            null,
+            null,
+        );
+        return self;
     }
 
     pub fn forward(self: *GRUCell, allocator: std.mem.Allocator, x: *trix.DataObject, h_prev: *trix.DataObject) !trix.DataObject {
-        return self.forward_fn(self, allocator, x, h_prev);
+        return self.cell_forward_fn(self, allocator, x, h_prev);
     }
 
     pub fn backprop(self: *GRUCell, allocator: std.mem.Allocator, grad_output: *trix.DataObject) !trix.DataObject {
-        return self.base.backprop_fn(self, allocator, grad_output);
+        return self.layer.backprop(allocator, grad_output);
     }
 
     pub fn deinit(self: *GRUCell) void {
-        self.w_ih.deinit();
-        self.w_hh.deinit();
-        self.bias.deinit();
+        self.layer.deinit();
     }
 
     pub fn zero_grad(self: *GRUCell) void {
-        if (self.w_ih.grad_value) |*g| @memset(g.items, 0.0);
-        if (self.w_hh.grad_value) |*g| @memset(g.items, 0.0);
-        if (self.bias.grad_value) |*g| @memset(g.items, 0.0);
+        self.layer.zero_grad();
     }
 };
 
@@ -966,6 +1138,29 @@ fn defaultLSTMForwardSequence(layer_ptr: *anyopaque, allocator: std.mem.Allocato
     return final_h;
 }
 
+fn defaultLSTMForwardInvalid(layer_ptr: *anyopaque, allocator: std.mem.Allocator, input: *trix.DataObject) !trix.DataObject {
+    _ = layer_ptr;
+    _ = allocator;
+    _ = input;
+    return error.InvalidOperation;
+}
+
+fn deinitLSTMLayer(layer_ptr: *anyopaque) void {
+    const self: *LSTMLayer = @ptrCast(@alignCast(layer_ptr));
+    for (self.cells.items) |cell| {
+        cell.deinit();
+    }
+    self.cells.deinit();
+    self.allocator.destroy(self);
+}
+
+fn zeroGradLSTMLayer(layer_ptr: *anyopaque) void {
+    const self: *LSTMLayer = @ptrCast(@alignCast(layer_ptr));
+    for (self.cells.items) |cell| {
+        cell.zero_grad();
+    }
+}
+
 /// Default LSTM layer backprop (simplified placeholder)
 fn defaultLSTMLayerBackprop(layer_ptr: *anyopaque, allocator: std.mem.Allocator, grad_output: *trix.DataObject) !trix.DataObject {
     _ = layer_ptr;
@@ -976,16 +1171,16 @@ fn defaultLSTMLayerBackprop(layer_ptr: *anyopaque, allocator: std.mem.Allocator,
 
 /// Multi-layer LSTM that processes sequences through stacked LSTM cells
 pub const LSTMLayer = struct {
-    base: LayerBase,
+    layer: Layer,
     allocator: std.mem.Allocator,
     num_layers: usize,
     input_size: usize,
     hidden_size: usize,
-    cells: std.array_list.Managed(LSTMCell),
+    cells: std.array_list.Managed(*LSTMCell),
     forward_sequence_fn: LSTMForwardSequenceFn,
 
-    pub fn init(allocator: std.mem.Allocator, num_layers: usize, input_size: usize, hidden_size: usize, forward_sequence_fn: ?LSTMForwardSequenceFn) !LSTMLayer {
-        var cells = try std.array_list.Managed(LSTMCell).initCapacity(allocator, num_layers);
+    pub fn init(allocator: std.mem.Allocator, num_layers: usize, input_size: usize, hidden_size: usize, forward_sequence_fn: ?LSTMForwardSequenceFn) !*LSTMLayer {
+        var cells = try std.array_list.Managed(*LSTMCell).initCapacity(allocator, num_layers);
 
         // First layer takes input_size, subsequent layers take hidden_size
         for (0..num_layers) |i| {
@@ -994,12 +1189,9 @@ pub const LSTMLayer = struct {
             try cells.append(cell);
         }
 
-        const layer = LSTMLayer{
-            .base = .{
-                .tag = .lstm,
-                .forward_fn = undefined,
-                .backprop_fn = defaultLSTMLayerBackprop,
-            },
+        const self = try allocator.create(LSTMLayer);
+        self.* = .{
+            .layer = undefined,
             .allocator = allocator,
             .num_layers = num_layers,
             .input_size = input_size,
@@ -1007,11 +1199,17 @@ pub const LSTMLayer = struct {
             .cells = cells,
             .forward_sequence_fn = forward_sequence_fn orelse defaultLSTMForwardSequence,
         };
-        return layer;
-    }
-
-    pub fn asLayer(self: LSTMLayer) Layer {
-        return .{ .lstm = self };
+        wireLayer(
+            &self.layer,
+            self,
+            defaultLSTMForwardInvalid,
+            defaultLSTMLayerBackprop,
+            deinitLSTMLayer,
+            zeroGradLSTMLayer,
+            null,
+            null,
+        );
+        return self;
     }
 
     /// Forward pass through all LSTM layers for one timestep
@@ -1083,141 +1281,50 @@ pub const LSTMLayer = struct {
     }
 
     pub fn deinit(self: *LSTMLayer) void {
-        for (self.cells.items) |*cell| {
-            cell.deinit();
-        }
-        self.cells.deinit();
+        self.layer.deinit();
     }
 
     pub fn zero_grad(self: *LSTMLayer) void {
-        for (self.cells.items) |*cell| {
-            cell.zero_grad();
-        }
+        self.layer.zero_grad();
     }
 
     pub fn backprop(self: *LSTMLayer, allocator: std.mem.Allocator, grad_output: *trix.DataObject) !trix.DataObject {
-        return self.base.backprop_fn(self, allocator, grad_output);
-    }
-};
-
-fn assertIsLayer(comptime T: type) void {
-    const info = @typeInfo(T);
-    if (info != .@"struct") {
-        @compileError("Expected layer struct, got " ++ @typeName(T));
-    }
-    if (!@hasField(T, "base")) {
-        @compileError("Layer missing .base field: " ++ @typeName(T));
-    }
-    if (!@hasDecl(T, "asLayer")) {
-        @compileError("Layer missing .asLayer() wrapper: " ++ @typeName(T));
-    }
-}
-
-/// Build the storage union from a concrete layer (uses `.asLayer()` on the child)
-pub fn wrapLayer(layer: anytype) Layer {
-    comptime assertIsLayer(@TypeOf(layer));
-    return layer.asLayer();
-}
-
-/// Union type for polymorphic layer storage
-pub const Layer = union(LayerType) {
-    linear: LinearLayer,
-    conv1d: Conv1DLayer,
-    conv2d: Conv2DLayer,
-    conv3d: Conv3DLayer,
-    lstm: LSTMLayer,
-    lstm_cell: LSTMCell,
-    gru_cell: GRUCell,
-
-    pub fn forward(self: *Layer, allocator: std.mem.Allocator, input: *trix.DataObject) !trix.DataObject {
-        return switch (self.*) {
-            .linear => |*l| l.forward(allocator, input),
-            .conv1d => |*l| l.forward(allocator, input),
-            .conv2d => |*l| l.forward(allocator, input),
-            .conv3d => |*l| l.forward(allocator, input),
-            .lstm => error.InvalidOperation, // LSTM uses forwardSequence
-            .lstm_cell => |*l| {
-                const batch = input.shape.?.items[0];
-                var h = try trix.DataObject.init(allocator, &[_]usize{ batch, l.hidden_size }, .f32);
-                @memset(h.values.items, 0.0);
-                var c = try trix.DataObject.init(allocator, &[_]usize{ batch, l.hidden_size }, .f32);
-                @memset(c.values.items, 0.0);
-                defer h.deinit();
-                defer c.deinit();
-                const result = try l.forward(allocator, input, &h, &c);
-                return result.h;
-            },
-            .gru_cell => |*l| {
-                const batch = input.shape.?.items[0];
-                var h = try trix.DataObject.init(allocator, &[_]usize{ batch, l.hidden_size }, .f32);
-                @memset(h.values.items, 0.0);
-                defer h.deinit();
-                return l.forward(allocator, input, &h);
-            },
-        };
-    }
-
-    pub fn backprop(self: *Layer, allocator: std.mem.Allocator, grad_output: *trix.DataObject) !trix.DataObject {
-        return switch (self.*) {
-            .linear => |*l| l.backprop(allocator, grad_output),
-            .conv1d => |*l| l.backprop(allocator, grad_output),
-            .conv2d => |*l| l.backprop(allocator, grad_output),
-            .conv3d => |*l| l.backprop(allocator, grad_output),
-            .lstm => |*l| l.backprop(allocator, grad_output),
-            .lstm_cell => |*l| l.backprop(allocator, grad_output),
-            .gru_cell => |*l| l.backprop(allocator, grad_output),
-        };
-    }
-
-    pub fn deinit(self: *Layer) void {
-        switch (self.*) {
-            .linear => |*l| l.deinit(),
-            .conv1d => |*l| l.deinit(),
-            .conv2d => |*l| l.deinit(),
-            .conv3d => |*l| l.deinit(),
-            .lstm => |*l| l.deinit(),
-            .lstm_cell => |*l| l.deinit(),
-            .gru_cell => |*l| l.deinit(),
-        }
-    }
-
-    pub fn zero_grad(self: *Layer) void {
-        switch (self.*) {
-            .linear => |*l| l.zero_grad(),
-            .conv1d => |*l| l.zero_grad(),
-            .conv2d => |*l| l.zero_grad(),
-            .conv3d => |*l| l.zero_grad(),
-            .lstm => |*l| l.zero_grad(),
-            .lstm_cell => |*l| l.zero_grad(),
-            .gru_cell => |*l| l.zero_grad(),
-        }
+        return self.layer.backprop(allocator, grad_output);
     }
 };
 
 /// Simple neural network container with generic layer support
 pub const NeuralNetwork = struct {
     allocator: std.mem.Allocator,
-    layers: std.array_list.Managed(Layer),
+    layers: std.array_list.Managed(*Layer),
 
     pub fn init(allocator: std.mem.Allocator) !NeuralNetwork {
-        const layers = try std.array_list.Managed(Layer).initCapacity(allocator, 10);
+        const layers = try std.array_list.Managed(*Layer).initCapacity(allocator, 10);
         return NeuralNetwork{
             .allocator = allocator,
             .layers = layers,
         };
     }
 
-    /// Generic add method - accepts any layer with `.base` and `.asLayer()`
-    pub fn add(self: *NeuralNetwork, layer: anytype) !void {
-        try self.layers.append(wrapLayer(layer));
+    /// Add a heap-allocated layer whose struct embeds `.layer` (pointer wired to the child).
+    pub fn add(self: *NeuralNetwork, child: anytype) !void {
+        const info = @typeInfo(@TypeOf(child));
+        if (info != .pointer) {
+            @compileError("nn.add expects heap layer pointer (*LinearLayer, *LSTMLayer, ...), got " ++ @typeName(@TypeOf(child)));
+        }
+        if (!@hasField(@TypeOf(child.*), "layer")) {
+            @compileError("layer struct must embed .layer: Layer, got " ++ @typeName(@TypeOf(child.*)));
+        }
+        child.layer.type = child;
+        try self.layers.append(&child.layer);
     }
 
     pub fn forward(self: *NeuralNetwork, allocator: std.mem.Allocator, input: *trix.DataObject) !trix.DataObject {
         var output = try trix.DataObject.init(allocator, input.shape.?.items, .f32);
         @memcpy(output.values.items, input.values.items);
 
-        for (self.layers.items) |*layer| {
-            const next_output = try layer.forward(allocator, &output);
+        for (self.layers.items) |layer| {
+            const next_output = try layer.*.forward(allocator, &output);
             // Only deinit intermediate outputs, not the final one
             if (output.values.items.ptr != input.values.items.ptr) {
                 output.deinit();
@@ -1236,8 +1343,8 @@ pub const NeuralNetwork = struct {
         var i: usize = self.layers.items.len;
         while (i > 0) {
             i -= 1;
-            var layer = &self.layers.items[i];
-            const prev_grad = try layer.backprop(allocator, &grad);
+            const layer = self.layers.items[i];
+            const prev_grad = try layer.*.backprop(allocator, &grad);
             if (i < self.layers.items.len - 1 or loss_grad.values.items.ptr != grad.values.items.ptr) {
                 grad.deinit();
             }
@@ -1247,37 +1354,33 @@ pub const NeuralNetwork = struct {
     }
 
     pub fn zero_grad(self: *NeuralNetwork) void {
-        for (self.layers.items) |*layer| {
-            layer.zero_grad();
+        for (self.layers.items) |layer| {
+            layer.*.zero_grad();
         }
     }
 
     pub fn update_parameters(self: *NeuralNetwork, optimizer: *grad_mod.Adam) !void {
-        for (self.layers.items) |*layer| {
-            switch (layer.*) {
-                .linear => |*l| {
-                    if (l.weights.grad_value) |_| {
-                        try optimizer.step(&l.weights);
-                    }
-                    if (l.bias.grad_value) |_| {
-                        try optimizer.step(&l.bias);
-                    }
-                },
-                else => {}, // Handle other layer types as needed
-            }
+        for (self.layers.items) |layer| {
+            try layer.*.update(optimizer);
+        }
+    }
+
+    pub fn clip_gradients(self: *NeuralNetwork, norm: f32) void {
+        for (self.layers.items) |layer| {
+            layer.*.clip_gradients(norm);
         }
     }
 
     pub fn deinit(self: *NeuralNetwork) void {
-        for (self.layers.items) |*layer| {
-            layer.deinit();
+        for (self.layers.items) |layer| {
+            layer.*.deinit();
         }
         self.layers.deinit();
     }
 
     pub fn get_layer(self: *NeuralNetwork, idx: usize) ?*Layer {
         if (idx < self.layers.items.len) {
-            return &self.layers.items[idx];
+            return self.layers.items[idx];
         }
         return null;
     }
@@ -1398,14 +1501,22 @@ pub fn denseSkipConcat(allocator: std.mem.Allocator, tensors: []const *trix.Data
 
 pub const Sequential = struct {
     allocator: std.mem.Allocator,
-    layers: std.array_list.Managed(Layer),
+    layers: std.array_list.Managed(*Layer),
+    owned: std.array_list.Managed(*anyopaque),
 
     pub fn init(allocator: std.mem.Allocator) !Sequential {
-        return .{ .allocator = allocator, .layers = try std.array_list.Managed(Layer).initCapacity(allocator, 8) };
+        return .{
+            .allocator = allocator,
+            .layers = try std.array_list.Managed(*Layer).initCapacity(allocator, 8),
+            .owned = try std.array_list.Managed(*anyopaque).initCapacity(allocator, 8),
+        };
     }
 
     pub fn addLinear(self: *Sequential, input_size: usize, output_size: usize, activation: []const u8, forward_fn: ?ForwardFn, backprop_fn: ?BackpropFn) !void {
-        try self.layers.append(Layer{ .linear = try LinearLayer.init(self.allocator, input_size, output_size, activation, forward_fn, backprop_fn) });
+        const linear = try LinearLayer.init(self.allocator, input_size, output_size, activation, forward_fn, backprop_fn);
+        linear.layer.type = linear;
+        try self.layers.append(&linear.layer);
+        try self.owned.append(linear);
     }
 
     pub fn forward(self: *Sequential, allocator: std.mem.Allocator, input: *trix.DataObject) !trix.DataObject {
@@ -1414,8 +1525,9 @@ pub const Sequential = struct {
     }
 
     pub fn deinit(self: *Sequential) void {
-        for (self.layers.items) |*l| l.deinit();
+        for (self.layers.items) |layer| layer.*.deinit();
         self.layers.deinit();
+        self.owned.deinit();
     }
 };
 
@@ -1443,9 +1555,9 @@ pub fn branchForward(allocator: std.mem.Allocator, input: *trix.DataObject, bran
 }
 
 pub const ResidualBlock = struct {
-    main_1: LinearLayer,
-    main_2: LinearLayer,
-    skip: ?LinearLayer,
+    main_1: *LinearLayer,
+    main_2: *LinearLayer,
+    skip: ?*LinearLayer,
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, input_size: usize, hidden_size: usize, output_size: usize, use_projection_skip: bool, forward_fn: ?ForwardFn, backprop_fn: ?BackpropFn) !ResidualBlock {
@@ -1462,7 +1574,7 @@ pub const ResidualBlock = struct {
         defer y.deinit();
         var f = try self.main_2.forward(allocator, &y);
         defer f.deinit();
-        var skip_out = if (self.skip) |*s| try s.forward(allocator, input) else try cloneTensor(allocator, input);
+        var skip_out = if (self.skip) |s| try s.forward(allocator, input) else try cloneTensor(allocator, input);
         defer skip_out.deinit();
         return residualAdd(allocator, &skip_out, &f);
     }
@@ -1470,15 +1582,15 @@ pub const ResidualBlock = struct {
     pub fn deinit(self: *ResidualBlock) void {
         self.main_1.deinit();
         self.main_2.deinit();
-        if (self.skip) |*s| s.deinit();
+        if (self.skip) |s| s.deinit();
     }
 };
 
 pub const InceptionModule = struct {
-    branch_1x1: LinearLayer,
-    branch_3x3: LinearLayer,
-    branch_5x5: LinearLayer,
-    pool_proj: LinearLayer,
+    branch_1x1: *LinearLayer,
+    branch_3x3: *LinearLayer,
+    branch_5x5: *LinearLayer,
+    pool_proj: *LinearLayer,
 
     pub fn init(allocator: std.mem.Allocator, input: usize, c1: usize, c3: usize, c5: usize, cp: usize, forward_fn: ?ForwardFn, backprop_fn: ?BackpropFn) !InceptionModule {
         return .{
