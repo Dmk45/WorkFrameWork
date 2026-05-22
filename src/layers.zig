@@ -299,7 +299,7 @@ pub const Conv1DLayer = struct {
         if (self.bias.grad_value) |*g| @memset(g.items, 0.0);
     }
 };
-backward
+
 /// Default Conv2D forward implementation
 fn defaultConv2DForward(layer_ptr: *anyopaque, allocator: std.mem.Allocator, input: *trix.DataObject) !trix.DataObject {
     const self: *Conv2DLayer = @ptrCast(@alignCast(layer_ptr));
