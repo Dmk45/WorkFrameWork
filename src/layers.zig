@@ -104,9 +104,15 @@ pub const Layer = struct {
     zero_grad_fn: ZeroGradFn,
     update_fn: ?UpdateFn = null,
     clip_grad_fn: ?ClipGradFn = null,
+    forward_sequence_fn: ?LSTMForwardSequenceFn = null,
 
     pub fn forward(self: *Layer, allocator: std.mem.Allocator, input: *trix.DataObject) !trix.DataObject {
         return self.forward_fn(self.type, allocator, input);
+    }
+
+    pub fn forwardSequence(self: *Layer, allocator: std.mem.Allocator, sequence: []const *trix.DataObject) !trix.DataObject {
+        const seq_fn = self.forward_sequence_fn orelse return error.InvalidOperation;
+        return seq_fn(self.type, allocator, sequence);
     }
 
     pub fn backprop(self: *Layer, allocator: std.mem.Allocator, grad_output: *trix.DataObject) !trix.DataObject {
@@ -151,6 +157,7 @@ pub fn wireLayer(
     zero_grad_fn: ZeroGradFn,
     update_fn: ?UpdateFn,
     clip_grad_fn: ?ClipGradFn,
+    forward_sequence_fn: ?LSTMForwardSequenceFn,
 ) void {
     layer.type = child;
     layer.forward_fn = forward_fn;
@@ -159,6 +166,7 @@ pub fn wireLayer(
     layer.zero_grad_fn = zero_grad_fn;
     layer.update_fn = update_fn;
     layer.clip_grad_fn = clip_grad_fn;
+    layer.forward_sequence_fn = forward_sequence_fn;
 }
 
 fn deinitLinear(layer_ptr: *anyopaque) void {
@@ -244,6 +252,7 @@ pub const LinearLayer = struct {
             zeroGradLinear,
             updateLinear,
             clipGradLinear,
+            null,
         );
         return self;
     }
@@ -365,6 +374,7 @@ pub const Conv1DLayer = struct {
             backprop_fn orelse defaultConv1DBackprop,
             deinitConv1D,
             zeroGradConv1D,
+            null,
             null,
             null,
         );
@@ -492,6 +502,7 @@ pub const Conv2DLayer = struct {
             backprop_fn orelse defaultConv2DBackprop,
             deinitConv2D,
             zeroGradConv2D,
+            null,
             null,
             null,
         );
@@ -632,6 +643,7 @@ pub const Conv3DLayer = struct {
             backprop_fn orelse defaultConv3DBackprop,
             deinitConv3D,
             zeroGradConv3D,
+            null,
             null,
             null,
         );
@@ -917,6 +929,7 @@ pub const LSTMCell = struct {
             zeroGradLSTMCell,
             null,
             null,
+            null,
         );
         return self;
     }
@@ -1038,6 +1051,7 @@ pub const GRUCell = struct {
             backprop_fn orelse defaultGRUCellBackprop,
             deinitGRUCell,
             zeroGradGRUCell,
+            null,
             null,
             null,
         );
@@ -1208,6 +1222,7 @@ pub const LSTMLayer = struct {
             zeroGradLSTMLayer,
             null,
             null,
+            self.forward_sequence_fn,
         );
         return self;
     }
@@ -1293,17 +1308,45 @@ pub const LSTMLayer = struct {
     }
 };
 
+/// Input to `NeuralNetwork.forward` — single tensor or a timestep sequence for RNN layers.
+pub const ForwardInput = union(enum) {
+    tensor: *trix.DataObject,
+    sequence: []const *trix.DataObject,
+};
+
+fn cacheActivation(allocator: std.mem.Allocator, activations: *std.array_list.Managed(trix.DataObject), tensor: *const trix.DataObject) !void {
+    var copy = try trix.DataObject.init(allocator, tensor.shape.?.items, .f32);
+    @memcpy(copy.values.items, tensor.values.items);
+    if (tensor.grad) {
+        copy.enableGrad();
+        try copy.ensureGradValue();
+        if (tensor.grad_value) |g| {
+            @memcpy(copy.grad_value.?.items, g.items);
+        }
+    }
+    try activations.append(copy);
+}
+
 /// Simple neural network container with generic layer support
 pub const NeuralNetwork = struct {
     allocator: std.mem.Allocator,
     layers: std.array_list.Managed(*Layer),
+    /// Per-layer outputs from the most recent `forward` call (owned until the next forward).
+    activations: std.array_list.Managed(trix.DataObject),
 
     pub fn init(allocator: std.mem.Allocator) !NeuralNetwork {
         const layers = try std.array_list.Managed(*Layer).initCapacity(allocator, 10);
+        const activations = try std.array_list.Managed(trix.DataObject).initCapacity(allocator, 10);
         return NeuralNetwork{
             .allocator = allocator,
             .layers = layers,
+            .activations = activations,
         };
+    }
+
+    fn clearActivations(self: *NeuralNetwork) void {
+        for (self.activations.items) |*a| a.deinit();
+        self.activations.clearRetainingCapacity();
     }
 
     /// Add a heap-allocated layer whose struct embeds `.layer` (pointer wired to the child).
@@ -1319,17 +1362,40 @@ pub const NeuralNetwork = struct {
         try self.layers.append(&child.layer);
     }
 
-    pub fn forward(self: *NeuralNetwork, allocator: std.mem.Allocator, input: *trix.DataObject) !trix.DataObject {
-        var output = try trix.DataObject.init(allocator, input.shape.?.items, .f32);
-        @memcpy(output.values.items, input.values.items);
+    pub fn forward(self: *NeuralNetwork, allocator: std.mem.Allocator, input: ForwardInput) !trix.DataObject {
+        if (self.layers.items.len == 0) return error.EmptyNetwork;
 
-        for (self.layers.items) |layer| {
-            const next_output = try layer.*.forward(allocator, &output);
-            // Only deinit intermediate outputs, not the final one
-            if (output.values.items.ptr != input.values.items.ptr) {
+        self.clearActivations();
+
+        var output: trix.DataObject = undefined;
+        var owns_output = false;
+        var layer_index: usize = 0;
+
+        switch (input) {
+            .tensor => |t| {
+                output = try trix.DataObject.init(allocator, t.shape.?.items, .f32);
+                @memcpy(output.values.items, t.values.items);
+                owns_output = true;
+                layer_index = 0;
+            },
+            .sequence => |sequence| {
+                const first = self.layers.items[0];
+                output = try first.forwardSequence(allocator, sequence);
+                try cacheActivation(allocator, &self.activations, &output);
+                owns_output = true;
+                layer_index = 1;
+            },
+        }
+
+        while (layer_index < self.layers.items.len) : (layer_index += 1) {
+            const layer = self.layers.items[layer_index];
+            const next_output = try layer.forward(allocator, &output);
+            if (owns_output) {
                 output.deinit();
             }
             output = next_output;
+            owns_output = true;
+            try cacheActivation(allocator, &self.activations, &output);
         }
 
         return output;
@@ -1372,10 +1438,12 @@ pub const NeuralNetwork = struct {
     }
 
     pub fn deinit(self: *NeuralNetwork) void {
+        self.clearActivations();
         for (self.layers.items) |layer| {
             layer.*.deinit();
         }
         self.layers.deinit();
+        self.activations.deinit();
     }
 
     pub fn get_layer(self: *NeuralNetwork, idx: usize) ?*Layer {
@@ -1520,8 +1588,16 @@ pub const Sequential = struct {
     }
 
     pub fn forward(self: *Sequential, allocator: std.mem.Allocator, input: *trix.DataObject) !trix.DataObject {
-        var nn = NeuralNetwork{ .allocator = self.allocator, .layers = self.layers };
-        return nn.forward(allocator, input);
+        var output = try trix.DataObject.init(allocator, input.shape.?.items, .f32);
+        @memcpy(output.values.items, input.values.items);
+
+        for (self.layers.items) |layer| {
+            const next_output = try layer.forward(allocator, &output);
+            output.deinit();
+            output = next_output;
+        }
+
+        return output;
     }
 
     pub fn deinit(self: *Sequential) void {

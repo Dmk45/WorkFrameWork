@@ -85,7 +85,7 @@ pub const Trainer = struct {
     }
 
     pub fn trainEpoch(self: *Trainer, x: *trix.DataObject, y: *trix.DataObject) !f32 {
-        var pred = try self.model.forward(self.allocator, x);
+        var pred = try self.model.forward(self.allocator, .{ .tensor = x });
         defer pred.deinit();
         const loss = try grad.meanSquaredError(&pred, y);
         if (self.config.clip_grad_norm) |max_norm| {
@@ -96,7 +96,7 @@ pub const Trainer = struct {
     }
 
     pub fn evaluate(self: *Trainer, x: *trix.DataObject, y: *trix.DataObject) !struct { loss: f32, metrics: ?metrics.ClassificationMetrics } {
-        var pred = try self.model.forward(self.allocator, x);
+        var pred = try self.model.forward(self.allocator, .{ .tensor = x });
         defer pred.deinit();
         const loss = try grad.meanSquaredError(&pred, y);
 

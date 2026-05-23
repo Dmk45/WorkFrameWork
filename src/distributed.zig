@@ -382,7 +382,7 @@ pub const DistributedTrainer = struct {
         
         // Forward pass on local model
         const local_model = &self.data_parallel.local_models[self.data_parallel.rank];
-        const predictions = try local_model.forward(self.allocator, &scattered_data[self.data_parallel.rank]);
+        const predictions = try local_model.forward(self.allocator, .{ .tensor = &scattered_data[self.data_parallel.rank] });
         defer predictions.deinit();
         
         // Compute loss

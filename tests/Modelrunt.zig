@@ -30,9 +30,6 @@ pub const EnergyLoadForecaster = struct {
     allocator: std.mem.Allocator,
     cfg: ForecastConfig,
     nn: layers.NeuralNetwork,
-    /// Cached activations for readout-layer gradient accumulation (common when RNN BPTT is partial).
-    lstm_encoding: ?trix.DataObject = null,
-    hidden1: ?trix.DataObject = null,
 
     pub fn init(allocator: std.mem.Allocator, cfg: ForecastConfig) !EnergyLoadForecaster {
         var nn = try layers.NeuralNetwork.init(allocator);
@@ -73,54 +70,15 @@ pub const EnergyLoadForecaster = struct {
         };
     }
 
-    fn clearCache(self: *EnergyLoadForecaster) void {
-        if (self.lstm_encoding) |*t| {
-            t.deinit();
-            self.lstm_encoding = null;
-        }
-        if (self.hidden1) |*t| {
-            t.deinit();
-            self.hidden1 = null;
-        }
-    }
-
-    fn lstmLayer(self: *EnergyLoadForecaster) *layers.LSTMLayer {
-        const layer = self.nn.get_layer(0) orelse unreachable;
-        return layers.Layer.child(layers.LSTMLayer, layer);
-    }
-
-    fn linearLayer(self: *EnergyLoadForecaster, idx: usize) *layers.LinearLayer {
-        const layer = self.nn.get_layer(idx) orelse unreachable;
-        return layers.Layer.child(layers.LinearLayer, layer);
-    }
-
     /// Forward: sequence of [batch, features] → [batch, 1] predicted load.
     pub fn forward(
         self: *EnergyLoadForecaster,
         allocator: std.mem.Allocator,
         sequence: []const *trix.DataObject,
     ) !trix.DataObject {
-        self.clearCache();
-
-        const lstm = self.lstmLayer();
-        var lstm_out = try lstm.forwardSequence(allocator, sequence);
-        lstm_out.enableGrad();
-        try lstm_out.ensureGradValue();
-        self.lstm_encoding = try cloneTensor(allocator, &lstm_out);
-
-        const linear1 = self.linearLayer(1);
-        var h1 = try linear1.forward(allocator, &lstm_out);
-        h1.enableGrad();
-        try h1.ensureGradValue();
-        self.hidden1 = try cloneTensor(allocator, &h1);
-        lstm_out.deinit();
-
-        const linear2 = self.linearLayer(2);
-        var output = try linear2.forward(allocator, &h1);
+        var output = try self.nn.forward(allocator, .{ .sequence = sequence });
         output.enableGrad();
         try output.ensureGradValue();
-        h1.deinit();
-
         return output;
     }
 
@@ -138,10 +96,12 @@ pub const EnergyLoadForecaster = struct {
         }
     }
 
-    /// Propagate MSE gradients into linear readout weights/bias using cached activations.
+    /// Propagate MSE gradients into linear readout weights/bias using activations cached by `nn.forward`.
     fn accumulateReadoutGrads(self: *EnergyLoadForecaster, allocator: std.mem.Allocator, d_output: *trix.DataObject) !void {
-        const h1_cache = &self.hidden1.?;
-        const lstm_cache = &self.lstm_encoding.?;
+        if (self.nn.activations.items.len < 3) return error.MissingActivations;
+
+        const lstm_cache = &self.nn.activations.items[0];
+        const h1_cache = &self.nn.activations.items[1];
 
         var d_loss = try trix.DataObject.init(allocator, d_output.shape.?.items, .f32);
         defer d_loss.deinit();
@@ -151,7 +111,8 @@ pub const EnergyLoadForecaster = struct {
         try d_loss.ensureGradValue();
         @memcpy(d_loss.grad_value.?.items, d_output.grad_value.?.items);
 
-        const linear2 = self.linearLayer(2);
+        const readout2_layer = self.nn.get_layer(2) orelse return error.EmptyNetwork;
+        const linear2 = layers.Layer.child(layers.LinearLayer, readout2_layer);
         try grad_math.matmulBackward(h1_cache, &linear2.weights, &d_loss, allocator);
         try accumulateBiasGrad(&d_loss, &linear2.bias);
 
@@ -160,7 +121,8 @@ pub const EnergyLoadForecaster = struct {
         var d_h1 = try modelwork2.core_math.matmul(allocator, &d_loss, &w2_t);
         defer d_h1.deinit();
 
-        const linear1 = self.linearLayer(1);
+        const readout1_layer = self.nn.get_layer(1) orelse return error.EmptyNetwork;
+        const linear1 = layers.Layer.child(layers.LinearLayer, readout1_layer);
         var d_lstm = try trix.DataObject.init(allocator, d_h1.shape.?.items, .f32);
         defer d_lstm.deinit();
         @memcpy(d_lstm.values.items, d_h1.values.items);
@@ -208,7 +170,6 @@ pub const EnergyLoadForecaster = struct {
     }
 
     pub fn deinit(self: *EnergyLoadForecaster) void {
-        self.clearCache();
         self.nn.deinit();
     }
 };
@@ -288,7 +249,8 @@ test "energy load forecaster: train with parameter updates" {
     var optimizer = try grad.Adam.init(allocator, cfg.learning_rate, cfg.adam_beta1, cfg.adam_beta2, cfg.adam_eps);
     defer optimizer.deinit();
 
-    const readout = model.linearLayer(2);
+    const readout_layer = model.nn.get_layer(2) orelse unreachable;
+    const readout = layers.Layer.child(layers.LinearLayer, readout_layer);
     const bias_before = readout.bias.values.items[0];
 
     var first_loss: f32 = undefined;

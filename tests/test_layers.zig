@@ -68,7 +68,7 @@ pub fn main() !void {
         // FORWARD PASS - automatically records all operations to tape!
         std.debug.print("\nEpoch {}: ", .{epoch + 1});
 
-        var output = try nn.forward(allocator, &input);
+        var output = try nn.forward(allocator, .{ .tensor = &input });
         defer output.deinit();
 
         std.debug.print("Output shape: {any}, Values: {any}\n", .{ output.shape.?.items, output.values.items });
