@@ -108,4 +108,3 @@ pub fn main() !void {
     std.debug.print("✓ Operations automatically recorded to tape!\n", .{});
     std.debug.print("✓ Backward pass automatically computes gradients!\n\n", .{});
 }
-

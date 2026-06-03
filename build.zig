@@ -19,7 +19,7 @@ pub fn build(b: *std.Build) void {
     const comprehensive_example = b.addExecutable(.{
         .name = "example-comprehensive",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("examples/test_comprehensive.zig"),
+            .root_source_file = b.path("tests/test_comprehensive.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{.{ .name = "modelwork2", .module = framework_module }},
@@ -30,7 +30,7 @@ pub fn build(b: *std.Build) void {
     const layers_example = b.addExecutable(.{
         .name = "example-layers",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("examples/test_layers.zig"),
+            .root_source_file = b.path("tests/test_layers.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{.{ .name = "modelwork2", .module = framework_module }},

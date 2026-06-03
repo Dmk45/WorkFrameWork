@@ -155,11 +155,7 @@ pub const ClassificationMetrics = struct {
 
         return auc;
     }
-
 };
-
-
-
 
 /// Progress bar for training
 pub const ProgressBar = struct {

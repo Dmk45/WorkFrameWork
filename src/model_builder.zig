@@ -344,7 +344,7 @@ pub const ModelScaling = struct {
             scaled_hidden_sizes[i] = @intFromFloat(@as(f32, @floatFromInt(size)) * scaling.width_multiplier);
         }
 
-        const scaled_depth = @intFromFloat(@as(f32, @floatFromInt(base_config.hidden_sizes.len)) * scaling.depth_multiplier);
+        const scaled_depth: usize = @intFromFloat(@as(f32, @floatFromInt(base_config.hidden_sizes.len)) * scaling.depth_multiplier);
 
         return ModelConfig{
             .name = base_config.name,

@@ -76,7 +76,7 @@ pub fn crossEntropy(y_pred: *trix.DataObject, y_true: *trix.DataObject, allocato
 
     for (0..y_pred.values.items.len) |i| {
         if (y_true.values.items[i] > 0.0) {
-            loss -= y_true.values.items[i] * std.math.log(f32, std.math.e, probs.values.items[i] + 1e-7);
+            loss -= y_true.values.items[i] * @log(probs.values.items[i] + 1e-7);
         }
     }
 
@@ -442,7 +442,7 @@ pub fn binaryCrossEntropy(y_pred: *trix.DataObject, y_true: *trix.DataObject) !f
     for (0..y_pred.values.items.len) |i| {
         const p = std.math.clamp(y_pred.values.items[i], 1e-7, 1.0 - 1e-7);
         const y = y_true.values.items[i];
-        loss += -(y * std.math.log(f32, std.math.e, p) + (1.0 - y) * std.math.log(f32, std.math.e, 1.0 - p));
+        loss += -(y * @log(p) + (1.0 - y) * @log(1.0 - p));
     }
     loss /= n;
     if (y_pred.grad) {
@@ -502,7 +502,7 @@ pub fn focalLoss(y_pred: *trix.DataObject, y_true: *trix.DataObject, alpha: f32,
     for (0..y_pred.values.items.len) |i| {
         const p = std.math.clamp(y_pred.values.items[i], 1e-7, 1.0 - 1e-7);
         const y = y_true.values.items[i];
-        const ce_loss = -y * std.math.log(f32, std.math.e, p) - (1.0 - y) * std.math.log(f32, std.math.e, 1.0 - p);
+        const ce_loss = -y * @log(p) - (1.0 - y) * @log(1.0 - p);
         const pt = if (y == 1.0) p else 1.0 - p;
         const focal_weight = std.math.pow(f32, 1.0 - pt, gamma);
         loss += alpha * focal_weight * ce_loss;
@@ -534,7 +534,7 @@ pub fn labelSmoothingLoss(y_pred: *trix.DataObject, y_true: *trix.DataObject, sm
         const p = std.math.clamp(y_pred.values.items[i], 1e-7, 1.0 - 1e-7);
         const y = y_true.values.items[i];
         const target = if (y == 1.0) 1.0 - smoothing else smooth_value;
-        loss += -target * std.math.log(f32, std.math.e, p);
+        loss += -target * @log(p);
     }
 
     if (y_pred.grad) {
@@ -585,7 +585,7 @@ pub fn logCoshLoss(y_pred: *trix.DataObject, y_true: *trix.DataObject) !f32 {
 
     for (0..y_pred.values.items.len) |i| {
         const diff = y_pred.values.items[i] - y_true.values.items[i];
-        loss += std.math.log(f32, std.math.e, std.math.cosh(diff));
+        loss += @log(std.math.cosh(diff));
     }
 
     if (y_pred.grad) {
@@ -738,7 +738,7 @@ pub fn infoNCELoss(features: *trix.DataObject, temperature: f32) !f32 {
             denominator += exp_sim;
         }
 
-        loss -= std.math.log(f32, std.math.e, numerator / denominator);
+        loss -= @log(numerator / denominator);
     }
 
     return loss / @as(f32, @floatFromInt(batch_size));
