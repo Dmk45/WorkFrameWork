@@ -1,9 +1,73 @@
 const std = @import("std");
 const modelwork2 = @import("modelwork2");
+
 const trix = modelwork2.matrix;
 const layers = modelwork2.layers;
 const grad = modelwork2.grad;
 const grad_math = modelwork2.grad_math;
+
+pub fn getSeries(
+    allocator: std.mem.Allocator,
+    client: *std.http.Client,
+    ticker: []const u8,
+) ![]u8 {
+    const url = try std.fmt.allocPrint(
+        allocator,
+        "https://external-api.kalshi.com/trade-api/v2/series/{s}",
+        .{ticker},
+    );
+    defer allocator.free(url);
+
+    var response = std.Io.Writer.Allocating.init(allocator);
+    defer response.deinit();
+
+    const result = try client.fetch(.{
+        .location = .{
+            .url = url,
+        },
+        .method = .GET,
+        .response_writer = &response.writer,
+    });
+
+    if (result.status != .ok) {
+        std.debug.print(
+            "HTTP Error: {}\n",
+            .{result.status},
+        );
+        return error.HttpRequestFailed;
+    }
+
+    return try response.toOwnedSlice();
+}
+
+test "getSeries: fetch Kalshi series data" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer {
+        const status = gpa.deinit();
+        std.debug.assert(status == .ok);
+    }
+
+    const allocator = gpa.allocator();
+
+    var client = std.http.Client{
+        .allocator = allocator,
+    };
+    defer client.deinit();
+
+    const data = try getSeries(
+        allocator,
+        &client,
+        "KXHIGHNY",
+    );
+    defer allocator.free(data);
+
+    std.debug.print(
+        "Kalshi Response:\n{s}\n",
+        .{data},
+    );
+
+    try std.testing.expect(data.len > 0);
+}
 
 /// Hyperparameters for a small building energy-load forecaster.
 /// Real deployment would load these from config/JSON (see `model_builder.ModelConfig`).
