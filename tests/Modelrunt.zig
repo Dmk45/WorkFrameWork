@@ -6,15 +6,15 @@ const layers = modelwork2.layers;
 const grad = modelwork2.grad;
 const grad_math = modelwork2.grad_math;
 
-pub fn getSeries(
+pub fn getPredictionPrices(
     allocator: std.mem.Allocator,
     client: *std.http.Client,
-    ticker: []const u8,
-) ![]u8 {
+    series: []const u8,
+) !void {
     const url = try std.fmt.allocPrint(
         allocator,
-        "https://external-api.kalshi.com/trade-api/v2/series/{s}",
-        .{ticker},
+        "https://external-api.kalshi.com/trade-api/v2/markets?series_ticker={s}",
+        .{series},
     );
     defer allocator.free(url);
 
@@ -30,17 +30,43 @@ pub fn getSeries(
     });
 
     if (result.status != .ok) {
-        std.debug.print(
-            "HTTP Error: {}\n",
-            .{result.status},
-        );
         return error.HttpRequestFailed;
     }
 
-    return try response.toOwnedSlice();
-}
+    const json_data = try response.toOwnedSlice();
+    defer allocator.free(json_data);
 
-test "getSeries: fetch Kalshi series data" {
+    var parsed = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        json_data,
+        .{},
+    );
+    defer parsed.deinit();
+
+    const markets = parsed.value.object.get("markets").?;
+
+    for (markets.array.items) |market| {
+        const subtitle =
+            market.object.get("subtitle").?.string;
+
+        const yes =
+            market.object.get("yes_ask_dollars").?.string;
+
+        const bid =
+            market.object.get("yes_bid_dollars").?.string;
+
+        std.debug.print(
+            "{s}\nYES Ask: {s}\nYES Bid: {s}\n\n",
+            .{
+                subtitle,
+                yes,
+                bid,
+            },
+        );
+    }
+}
+test "getPredictionPrices: fetch Kalshi prediction data" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer {
         const status = gpa.deinit();
@@ -54,19 +80,11 @@ test "getSeries: fetch Kalshi series data" {
     };
     defer client.deinit();
 
-    const data = try getSeries(
+    try getPredictionPrices(
         allocator,
         &client,
-        "KXHIGHNY",
+        "KXBTCD-26JUL07-64000",
     );
-    defer allocator.free(data);
-
-    std.debug.print(
-        "Kalshi Response:\n{s}\n",
-        .{data},
-    );
-
-    try std.testing.expect(data.len > 0);
 }
 
 /// Hyperparameters for a small building energy-load forecaster.
