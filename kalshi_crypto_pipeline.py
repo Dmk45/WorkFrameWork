@@ -62,9 +62,13 @@ class TicketHistory(BaseModel):
         return None
 
     def to_summary(self) -> Dict[str, Any]:
-        return {
+        return self.to_dict(include_trades=False)
+
+    def to_dict(self, include_trades: bool = True) -> Dict[str, Any]:
+        payload = {
             "ticket_id": self.ticket_id,
             "event_ticker": self.event_ticker,
+            "event_title": self.event_title,
             "label": self.label,
             "trade_count": self.trade_count,
             "time_traversed_days": round(self.time_traversed_days, 3),
@@ -75,6 +79,23 @@ class TicketHistory(BaseModel):
             "backfill_source_ticket_id": self.backfill_source_ticket_id,
             "backfill_time_days": round(self.backfill_time_days, 3),
         }
+        if include_trades:
+            payload["trades"] = [
+                {
+                    "timestamp": trade.timestamp.isoformat(),
+                    "quantity": trade.quantity,
+                    "position": trade.position,
+                    "action": trade.action,
+                    "probability": trade.probability,
+                    "price": trade.price,
+                    "ticket_id": trade.ticket_id,
+                    "trade_id": trade.trade_id,
+                    "probability_change": trade.probability_change,
+                    "time_since_previous_trade_seconds": trade.time_since_previous_trade_seconds,
+                }
+                for trade in self.trades
+            ]
+        return payload
 
 
 class TrainingExample(BaseModel):
@@ -153,7 +174,7 @@ class KalshiHistoricalDataBuilder:
         return {
             "crypto": crypto,
             "requested_days": days,
-            "ticket_histories": [ticket.to_summary() for ticket in filled_tickets],
+            "ticket_histories": [ticket.to_dict(include_trades=True) for ticket in filled_tickets],
             "training_rows": [self._row_to_dict(row) for row in training_rows],
             "notes": [
                 "The dataset is ticket-centric and preserves buy/sell and yes/no labels.",
@@ -413,28 +434,29 @@ class KalshiHistoricalDataBuilder:
     def _build_training_rows(self, tickets: List[TicketHistory]) -> List[TrainingExample]:
         rows: List[TrainingExample] = []
         for ticket in tickets:
-            if len(ticket.trades) < 2:
+            if not ticket.trades:
                 continue
             first_trade_time = ticket.trades[0].timestamp
-            for idx in range(1, len(ticket.trades)):
+            for idx in range(0, len(ticket.trades)):
                 current = ticket.trades[idx]
-                previous = ticket.trades[idx - 1]
-                if current.timestamp <= previous.timestamp:
+                previous = ticket.trades[idx - 1] if idx > 0 else ticket.trades[idx]
+                if current.timestamp <= previous.timestamp and idx > 0:
                     continue
                 time_since_open_hours = max(0.0, (current.timestamp - first_trade_time).total_seconds() / 3600.0)
+                target = 1 if idx == 0 else (1 if current.probability >= previous.probability else 0)
                 rows.append(
                     TrainingExample(
                         ticket_id=ticket.ticket_id,
                         event_ticker=ticket.event_ticker,
                         timestamp=current.timestamp,
                         probability=current.probability,
-                        probability_change=current.probability_change,
+                        probability_change=current.probability_change if idx > 0 else 0.0,
                         quantity=current.quantity,
                         position=1 if current.position == "yes" else 0,
                         action=1 if current.action == "buy" else 0,
                         time_since_open_hours=time_since_open_hours,
                         ticket_time_span_days=ticket.time_traversed_days,
-                        target=1 if current.probability >= previous.probability else 0,
+                        target=target,
                         source_ticket_id=ticket.backfill_source_ticket_id,
                     )
                 )
