@@ -6,12 +6,14 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
-
+opa
 import requests
 from pydantic import BaseModel, Field
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
+DEFAULT_API_BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
 
 
 class TradeRecord(BaseModel):
@@ -129,11 +131,24 @@ class KalshiHistoricalDataBuilder:
         self.api_key = api_key
         self.timeout = timeout
         self.use_offline = use_offline
+
+        if not self.use_offline and self.api_base_url != DEFAULT_API_BASE_URL:
+            raise ValueError(
+                "Live mode only supports the Kalshi API at "
+                f"{DEFAULT_API_BASE_URL}. Set --offline to use embedded sample data."
+            )
+
         self.session = requests.Session()
 
     def build_dataset(self, crypto: str, days: int, raw_only: bool = False) -> Dict[str, Any]:
         logger.info("Building dataset for %s over %s days", crypto, days)
         ticket_payloads = self._fetch_ticket_payloads(crypto, days)
+        if not ticket_payloads and not self.use_offline:
+            raise RuntimeError(
+                "No live Kalshi ticket payloads were available. "
+                "Ensure the Kalshi API is reachable and the crypto filter is correct."
+            )
+        logger.info("Fetched %s ticket payloads for %s", len(ticket_payloads), crypto)
         tickets: List[TicketHistory] = []
 
         for payload in ticket_payloads:
@@ -141,6 +156,13 @@ class KalshiHistoricalDataBuilder:
             if not ticket.trades:
                 continue
             tickets.append(ticket)
+        logger.info("Built %s candidate tickets with trade history", len(tickets))
+
+        if not tickets and not self.use_offline:
+            raise RuntimeError(
+                "No live ticket histories with trades were built. "
+                "The Kalshi live trade endpoints returned no usable trades for the requested crypto."
+            )
 
         # Fill gaps in time coverage when possible.
         target_span = max(days, 1)
@@ -160,6 +182,26 @@ class KalshiHistoricalDataBuilder:
                 filled_tickets.append(ticket)
 
         training_rows = self._build_training_rows(filled_tickets)
+
+        latest_trade: Optional[TradeRecord] = None
+        for ticket in filled_tickets:
+            if ticket.trades:
+                candidate = ticket.trades[-1]
+                if latest_trade is None or candidate.timestamp > latest_trade.timestamp:
+                    latest_trade = candidate
+        if latest_trade is not None:
+            logger.info(
+                "Latest trade added: ticket=%s trade_id=%s timestamp=%s quantity=%s position=%s action=%s probability=%s price=%s",
+                latest_trade.ticket_id,
+                latest_trade.trade_id,
+                latest_trade.timestamp.isoformat(),
+                latest_trade.quantity,
+                latest_trade.position,
+                latest_trade.action,
+                latest_trade.probability,
+                latest_trade.price,
+            )
+
         if raw_only:
             return {
                 "crypto": crypto,
@@ -186,23 +228,36 @@ class KalshiHistoricalDataBuilder:
         if self.use_offline:
             return self._offline_ticket_payloads(crypto, days)
 
-        endpoints = [
-            "/series",
-            "/tradeable_events",
-            "/markets",
+        trade_based_payloads = self._fetch_ticket_payloads_from_trades(crypto)
+        if trade_based_payloads:
+            logger.info(
+                "Fetched %s ticket payloads directly from /markets/trades for %s",
+                len(trade_based_payloads),
+                crypto,
+            )
+            return trade_based_payloads
+
+        endpoint = "/markets"
+        param_variants = [
+            {"event_ticker_symbol": crypto, "limit": 1000},
+            {"ticker": crypto, "limit": 1000},
+            {"market_ticker": crypto, "limit": 1000},
+            {"event_ticker": crypto, "limit": 1000},
+            {"query": crypto, "limit": 1000},
+            {"search": crypto, "limit": 1000},
         ]
-        for endpoint in endpoints:
+
+        for params in param_variants:
             try:
-                response = self._request("GET", endpoint, params={"event_ticker": crypto, "limit": 100})
-                payload = response.json()
-                items = self._extract_items(payload)
+                items = self._fetch_paginated_items(endpoint, params=params)
+                logger.info("Fetched %s items from %s with params=%s", len(items), endpoint, params)
                 if items:
                     return [self._normalise_ticket_payload(item) for item in items]
             except Exception as exc:  # pragma: no cover - defensive path
                 logger.warning("Endpoint %s failed with %s", endpoint, exc)
 
-        logger.warning("Falling back to offline sample because no live Kalshi payloads were available.")
-        return self._offline_ticket_payloads(crypto, days)
+        logger.warning("No live Kalshi ticket payloads were available. Returning empty payload list.")
+        return []
 
     def _request(self, method: str, path: str, params: Optional[Dict[str, Any]] = None) -> requests.Response:
         headers = {}
@@ -215,7 +270,7 @@ class KalshiHistoricalDataBuilder:
 
     def _extract_items(self, payload: Any) -> List[Dict[str, Any]]:
         if isinstance(payload, dict):
-            for key in ("data", "results", "series", "markets", "events", "tradeable_events"):
+            for key in ("data", "results", "series", "markets", "events", "tradeable_events", "trades"):
                 value = payload.get(key)
                 if isinstance(value, list):
                     return [item for item in value if isinstance(item, dict)]
@@ -224,12 +279,121 @@ class KalshiHistoricalDataBuilder:
             return [item for item in payload if isinstance(item, dict)]
         return []
 
+    def _fetch_paginated_items(
+        self,
+        path: str,
+        params: Optional[Dict[str, Any]] = None,
+        items_key: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        all_items: List[Dict[str, Any]] = []
+        params = dict(params or {})
+        params.setdefault("limit", 1000)
+        cursor: Optional[str] = None
+
+        while True:
+            request_params = dict(params)
+            if cursor:
+                request_params["cursor"] = cursor
+
+            try:
+                response = self._request("GET", path, params=request_params)
+            except requests.HTTPError as exc:
+                status_code = getattr(exc.response, "status_code", None)
+                if status_code == 429 and all_items:
+                    logger.warning(
+                        "Rate limited while fetching %s with params=%s; returning %s collected items.",
+                        path,
+                        request_params,
+                        len(all_items),
+                    )
+                    break
+                raise
+
+            payload = response.json()
+            if items_key:
+                items = payload.get(items_key, [])
+            else:
+                items = self._extract_items(payload)
+
+            if isinstance(items, list):
+                all_items.extend([item for item in items if isinstance(item, dict)])
+
+            cursor = payload.get("cursor")
+            if not cursor:
+                break
+
+        return all_items
+
+    def _fetch_ticket_payloads_from_trades(self, crypto: str) -> List[Dict[str, Any]]:
+        param_variants = [
+            {"event_ticker_symbol": crypto, "limit": 1000},
+            {"ticker": crypto, "limit": 1000},
+            {"market_ticker": crypto, "limit": 1000},
+            {"event_ticker": crypto, "limit": 1000},
+            {"query": crypto, "limit": 1000},
+            {"search": crypto, "limit": 1000},
+        ]
+
+        trades_by_id: Dict[str, Dict[str, Any]] = {}
+        for params in param_variants:
+            try:
+                trades = self._fetch_paginated_items("/markets/trades", params=params, items_key="trades")
+            except Exception as exc:
+                logger.warning("Failed to fetch live trades for %s with params=%s: %s", crypto, params, exc)
+                continue
+            for raw_trade in trades:
+                if not isinstance(raw_trade, dict):
+                    continue
+                trade_id = self._first_present(raw_trade, ["trade_id", "id", "uuid", "order_id"])
+                if trade_id is None:
+                    continue
+                trades_by_id[str(trade_id)] = raw_trade
+
+        if not trades_by_id:
+            return []
+
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for raw_trade in trades_by_id.values():
+            ticket_key = self._first_present(raw_trade, ["ticker", "market_ticker", "event_ticker", "id"])
+            if ticket_key is None:
+                continue
+            ticket_id = str(ticket_key)
+            grouped.setdefault(ticket_id, []).append(raw_trade)
+
+        payloads: List[Dict[str, Any]] = []
+        for ticket_id, trade_list in grouped.items():
+            sorted_trades = sorted(
+                trade_list,
+                key=lambda item: self._parse_time(
+                    self._first_present(item, ["created_time", "timestamp", "time", "trade_time"])
+                ) or datetime.fromtimestamp(0, tz=timezone.utc),
+            )
+            first_ts = self._parse_time(self._first_present(sorted_trades[0], ["created_time", "timestamp", "time", "trade_time"]))
+            last_ts = self._parse_time(self._first_present(sorted_trades[-1], ["created_time", "timestamp", "time", "trade_time"]))
+            payloads.append(
+                {
+                    "ticket_id": ticket_id,
+                    "event_ticker": crypto,
+                    "event_title": None,
+                    "open_timestamp": first_ts,
+                    "close_timestamp": last_ts,
+                    "trades": sorted_trades,
+                }
+            )
+
+        if payloads:
+            logger.info("Built %s live ticket payloads from /markets/trades for %s", len(payloads), crypto)
+        return payloads
+
     def _normalise_ticket_payload(self, item: Dict[str, Any]) -> Dict[str, Any]:
-        ticket_id = self._first_present(item, ["id", "ticket_id", "market_id", "series_id", "contract_id"])
+        if "market" in item and isinstance(item["market"], dict):
+            item = item["market"]
+
+        ticket_id = self._first_present(item, ["ticker", "id", "ticket_id", "market_id", "series_id", "contract_id"])
         event_ticker = self._first_present(item, ["event_ticker", "event_ticker_symbol", "ticker", "symbol"])
         title = self._first_present(item, ["title", "name", "event_title", "market_title"])
-        open_ts = self._parse_time(self._first_present(item, ["open_time", "open_timestamp", "start_time", "created_at"]))
-        close_ts = self._parse_time(self._first_present(item, ["close_time", "close_timestamp", "end_time", "settlement_time"]))
+        open_ts = self._parse_time(self._first_present(item, ["open_time", "open_timestamp", "created_time", "start_time", "created_at"]))
+        close_ts = self._parse_time(self._first_present(item, ["close_time", "close_timestamp", "expiration_time", "settlement_time"]))
 
         return {
             "ticket_id": str(ticket_id) if ticket_id is not None else "unknown-ticket",
@@ -241,10 +405,13 @@ class KalshiHistoricalDataBuilder:
         }
 
     def _build_ticket_history(self, payload: Dict[str, Any], crypto: str) -> TicketHistory:
-        ticket_id = payload.get("ticket_id") or payload.get("id") or payload.get("market_id") or "unknown-ticket"
-        event_ticker = payload.get("event_ticker") or crypto
+        if "market" in payload and isinstance(payload["market"], dict):
+            payload = payload["market"]
+
+        ticket_id = payload.get("ticket_id") or payload.get("id") or payload.get("market_id") or payload.get("ticker") or "unknown-ticket"
+        event_ticker = payload.get("event_ticker") or payload.get("event_ticker_symbol") or crypto
         event_title = payload.get("event_title") or payload.get("title")
-        open_ts = payload.get("open_timestamp") or payload.get("open_time")
+        open_ts = payload.get("open_timestamp") or payload.get("open_time") or payload.get("created_time")
         close_ts = payload.get("close_timestamp") or payload.get("close_time")
         open_dt = self._parse_time(open_ts)
         close_dt = self._parse_time(close_ts)
@@ -253,14 +420,23 @@ class KalshiHistoricalDataBuilder:
         raw_trades = payload.get("trades") or []
         if not raw_trades and not self.use_offline:
             try:
-                raw_trades = self._fetch_trade_history(ticket_id)
+                raw_trades = self._fetch_trade_history(ticket_id, open_dt, close_dt)
             except Exception as exc:  # pragma: no cover - defensive path
                 logger.warning("Unable to fetch trade history for %s: %s", ticket_id, exc)
 
         if not raw_trades and self.use_offline:
             raw_trades = self._offline_trades(ticket_id, open_dt or datetime.now(timezone.utc))
         elif not raw_trades:
-            raw_trades = self._offline_trades(ticket_id, open_dt or datetime.now(timezone.utc))
+            logger.info("No live trades found for %s and offline fallback is disabled.", ticket_id)
+            raw_trades = []
+
+        logger.info(
+            "Ticket %s: raw_trades=%s open=%s close=%s",
+            ticket_id,
+            len(raw_trades),
+            open_dt.isoformat() if open_dt else None,
+            close_dt.isoformat() if close_dt else None,
+        )
 
         previous_trade: Optional[TradeRecord] = None
         for trade_idx, raw_trade in enumerate(raw_trades):
@@ -300,22 +476,29 @@ class KalshiHistoricalDataBuilder:
             label=f"{str(event_ticker)}-{str(ticket_id)}",
         )
 
-    def _fetch_trade_history(self, ticket_id: str) -> List[Dict[str, Any]]:
-        endpoints = [
-            f"/markets/{ticket_id}/trades",
-            f"/tradeable_events/{ticket_id}/trades",
-            f"/markets/{ticket_id}/price_history",
-            f"/trade_history?market_id={ticket_id}",
-        ]
-        for endpoint in endpoints:
+    def _fetch_trade_history(
+        self,
+        ticket_id: str,
+        open_timestamp: Optional[datetime] = None,
+        close_timestamp: Optional[datetime] = None,
+    ) -> List[Dict[str, Any]]:
+        param_keys = ["market_ticker", "ticker", "event_ticker", "event_ticker_symbol", "id"]
+
+        for key in param_keys:
+            params: Dict[str, Any] = {key: ticket_id, "limit": 1000}
+            if open_timestamp is not None:
+                params["min_ts"] = int(open_timestamp.timestamp())
+            if close_timestamp is not None:
+                params["max_ts"] = int(close_timestamp.timestamp())
+
             try:
-                response = self._request("GET", endpoint)
-                payload = response.json()
-                items = self._extract_items(payload)
+                items = self._fetch_paginated_items("/markets/trades", params=params, items_key="trades")
                 if items:
+                    logger.info("Fetched %s trades for %s using %s", len(items), ticket_id, key)
                     return items
             except Exception as exc:  # pragma: no cover - defensive path
-                logger.warning("Trade history endpoint %s failed: %s", endpoint, exc)
+                logger.warning("Trade history endpoint /markets/trades failed for %s=%s: %s", key, ticket_id, exc)
+
         return []
 
     def _normalise_trade_record(
@@ -331,23 +514,25 @@ class KalshiHistoricalDataBuilder:
         timestamp = self._parse_time(
             self._first_present(
                 raw_trade,
-                ["timestamp", "created_at", "time", "date", "trade_time", "updated_at"],
+                ["created_time", "timestamp", "created_at", "time", "date", "trade_time", "updated_at"],
             )
         )
         if timestamp is None:
             return None
 
-        quantity = self._coerce_float(self._first_present(raw_trade, ["quantity", "size", "amount", "qty"]))
+        quantity = self._coerce_float(self._first_present(raw_trade, ["count_fp", "quantity", "size", "amount", "qty"]))
         if quantity is None:
             quantity = 1.0
 
-        price = self._coerce_float(self._first_present(raw_trade, ["price", "mid_price", "probability", "prob", "value"]))
+        price = self._coerce_float(self._first_present(raw_trade, ["yes_price_dollars", "price", "mid_price", "probability", "prob", "value"]))
         if price is None:
-            price = 0.5
+            no_price = self._coerce_float(self._first_present(raw_trade, ["no_price_dollars"]))
+            if no_price is not None:
+                price = max(0.0, min(1.0, 1.0 - no_price))
+            else:
+                price = 0.5
 
-        probability = self._coerce_float(self._first_present(raw_trade, ["probability", "prob", "price", "mid_price"]))
-        if probability is None:
-            probability = max(0.0, min(1.0, price))
+        probability = price
 
         position = self._infer_position(raw_trade)
         action = self._infer_action(raw_trade)
@@ -372,7 +557,9 @@ class KalshiHistoricalDataBuilder:
         )
 
     def _infer_position(self, raw_trade: Dict[str, Any]) -> str:
-        raw_position = str(self._first_present(raw_trade, ["position", "side", "direction", "yes_no", "contract"]) or "").lower()
+        raw_position = str(
+            self._first_present(raw_trade, ["taker_outcome_side", "yes_no", "position", "side", "direction", "contract"]) or ""
+        ).lower()
         if "yes" in raw_position:
             return "yes"
         if "no" in raw_position:
@@ -380,10 +567,12 @@ class KalshiHistoricalDataBuilder:
         return "yes"
 
     def _infer_action(self, raw_trade: Dict[str, Any]) -> str:
-        raw_action = str(self._first_present(raw_trade, ["action", "side", "trade_type", "order_type"]) or "").lower()
-        if "sell" in raw_action or raw_action == "short":
+        raw_action = str(
+            self._first_present(raw_trade, ["action", "taker_book_side", "side", "trade_type", "order_type"]) or ""
+        ).lower()
+        if "sell" in raw_action or raw_action == "short" or raw_action == "ask":
             return "sell"
-        if "buy" in raw_action or raw_action == "long":
+        if "buy" in raw_action or raw_action == "long" or raw_action == "bid":
             return "buy"
         return "buy"
 
@@ -564,7 +753,7 @@ def main() -> None:
     parser.add_argument("--days", type=int, default=60, help="The number of days of ticket history to collect")
     parser.add_argument("--output", default="kalshi_training_dataset.json", help="Path to write the JSON payload")
     parser.add_argument("--api-key", default=os.getenv("KALSHI_API_KEY"), help="Optional Kalshi API key")
-    parser.add_argument("--api-base-url", default=os.getenv("KALSHI_API_BASE_URL", "https://api.elections.kalshi.com/trade/v2"), help="Kalshi API base URL")
+    parser.add_argument("--api-base-url", default=DEFAULT_API_BASE_URL, help="Kalshi API base URL; live mode only supports the default Kalshi endpoint")
     parser.add_argument("--offline", action="store_true", help="Use an embedded sample dataset when no live API is available")
     parser.add_argument("--raw-only", action="store_true", help="Emit a simpler raw-series format instead of the ticket-centric structure")
     args = parser.parse_args()
