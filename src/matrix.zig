@@ -192,3 +192,16 @@ pub const DataObject = struct {
         }
     }
 };
+
+pub fn cloneTensor(allocator: std.mem.Allocator, src: *const DataObject) !DataObject {
+    var copy = try DataObject.init(allocator, src.shape.?.items, .f32);
+    @memcpy(copy.values.items, src.values.items);
+    if (src.grad) {
+        copy.enableGrad();
+        try copy.ensureGradValue();
+        if (src.grad_value) |g| {
+            @memcpy(copy.grad_value.?.items, g.items);
+        }
+    }
+    return copy;
+}

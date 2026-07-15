@@ -1314,6 +1314,11 @@ pub const ForwardInput = union(enum) {
     sequence: []const *trix.DataObject,
 };
 
+pub const NeuralNetworkForwardFn = *const fn (network: *anyopaque, allocator: std.mem.Allocator, input: ForwardInput) anyerror!trix.DataObject;
+pub const NeuralNetworkBackwardFn = *const fn (network: *anyopaque, allocator: std.mem.Allocator, loss_grad: *trix.DataObject) anyerror!void;
+pub const NeuralNetworkAccumulateGradientsFn = *const fn (network: *anyopaque, allocator: std.mem.Allocator, output: *trix.DataObject) anyerror!void;
+pub const NeuralNetworkTrainStepFn = *const fn (network: *anyopaque, allocator: std.mem.Allocator, input: ForwardInput, target: *trix.DataObject, optimizer: *grad_mod.Adam) anyerror!f32;
+
 fn cacheActivation(allocator: std.mem.Allocator, activations: *std.array_list.Managed(trix.DataObject), tensor: *const trix.DataObject) !void {
     var copy = try trix.DataObject.init(allocator, tensor.shape.?.items, .f32);
     @memcpy(copy.values.items, tensor.values.items);
@@ -1327,12 +1332,153 @@ fn cacheActivation(allocator: std.mem.Allocator, activations: *std.array_list.Ma
     try activations.append(copy);
 }
 
+fn defaultNeuralNetworkForward(network_ptr: *anyopaque, allocator: std.mem.Allocator, input: ForwardInput) !trix.DataObject {
+    const network: *NeuralNetwork = @ptrCast(@alignCast(network_ptr));
+    if (network.layers.items.len == 0) return error.EmptyNetwork;
+
+    network.clearActivations();
+
+    var output: trix.DataObject = undefined;
+    var owns_output = false;
+    var layer_index: usize = 0;
+
+    switch (input) {
+        .tensor => |t| {
+            output = try trix.DataObject.init(allocator, t.shape.?.items, .f32);
+            @memcpy(output.values.items, t.values.items);
+            owns_output = true;
+            layer_index = 0;
+        },
+        .sequence => |sequence| {
+            const first = network.layers.items[0];
+            output = try first.forwardSequence(allocator, sequence);
+            try cacheActivation(allocator, &network.activations, &output);
+            owns_output = true;
+            layer_index = 1;
+        },
+    }
+
+    while (layer_index < network.layers.items.len) : (layer_index += 1) {
+        const layer = network.layers.items[layer_index];
+        const next_output = try layer.forward(allocator, &output);
+        if (owns_output) {
+            output.deinit();
+        }
+        output = next_output;
+        owns_output = true;
+        try cacheActivation(allocator, &network.activations, &output);
+    }
+
+    return output;
+}
+
+fn defaultNeuralNetworkBackward(network_ptr: *anyopaque, allocator: std.mem.Allocator, loss_grad: *trix.DataObject) !void {
+    const network: *NeuralNetwork = @ptrCast(@alignCast(network_ptr));
+    var grad = loss_grad.*;
+
+    var i: usize = network.layers.items.len;
+    while (i > 0) {
+        i -= 1;
+        const layer = network.layers.items[i];
+        const prev_grad = try layer.*.backprop(allocator, &grad);
+        if (i < network.layers.items.len - 1 or loss_grad.values.items.ptr != grad.values.items.ptr) {
+            grad.deinit();
+        }
+        grad = prev_grad;
+    }
+    grad.deinit();
+}
+
+fn accumulateBiasGrad(d_output: *const trix.DataObject, bias: *trix.DataObject) !void {
+    try bias.ensureGradValue();
+    const batch = d_output.shape.?.items[0];
+    const out_dim = d_output.shape.?.items[1];
+    const grads = if (d_output.grad_value) |g| g.items else d_output.values.items;
+    for (0..out_dim) |j| {
+        var acc: f32 = 0.0;
+        for (0..batch) |b| {
+            acc += grads[b * out_dim + j];
+        }
+        bias.grad_value.?.items[j] += acc;
+    }
+}
+
+fn defaultNeuralNetworkAccumulateGradients(network_ptr: *anyopaque, allocator: std.mem.Allocator, d_output: *trix.DataObject) !void {
+    const network: *NeuralNetwork = @ptrCast(@alignCast(network_ptr));
+    if (network.activations.items.len < 3) return;
+
+    const lstm_cache = &network.activations.items[0];
+    const h1_cache = &network.activations.items[1];
+
+    var d_loss = try trix.DataObject.init(allocator, d_output.shape.?.items, .f32);
+    defer d_loss.deinit();
+    try d_output.ensureGradValue();
+    @memcpy(d_loss.values.items, d_output.grad_value.?.items);
+    d_loss.enableGrad();
+    try d_loss.ensureGradValue();
+    @memcpy(d_loss.grad_value.?.items, d_output.grad_value.?.items);
+
+    const readout2_layer = network.get_layer(2) orelse return;
+    const linear2 = Layer.child(LinearLayer, readout2_layer);
+    try grad_math.matmulBackward(h1_cache, &linear2.weights, &d_loss, allocator);
+    try accumulateBiasGrad(&d_loss, &linear2.bias);
+
+    var w2_t = try core.transpose(allocator, &linear2.weights);
+    defer w2_t.deinit();
+    var d_h1 = try core.matmul(allocator, &d_loss, &w2_t);
+    defer d_h1.deinit();
+
+    const readout1_layer = network.get_layer(1) orelse return;
+    const linear1 = Layer.child(LinearLayer, readout1_layer);
+    var d_lstm = try trix.DataObject.init(allocator, d_h1.shape.?.items, .f32);
+    defer d_lstm.deinit();
+    @memcpy(d_lstm.values.items, d_h1.values.items);
+
+    if (std.mem.eql(u8, linear1.config.activation, "relu")) {
+        h1_cache.enableGrad();
+        try h1_cache.ensureGradValue();
+        @memset(h1_cache.grad_value.?.items, 0.0);
+        try grad_math.reluBackward(h1_cache, &d_h1);
+        @memcpy(d_lstm.values.items, h1_cache.grad_value.?.items);
+    }
+
+    try grad_math.matmulBackward(lstm_cache, &linear1.weights, &d_lstm, allocator);
+    try accumulateBiasGrad(&d_lstm, &linear1.bias);
+}
+
+fn defaultNeuralNetworkTrainStep(network_ptr: *anyopaque, allocator: std.mem.Allocator, input: ForwardInput, target: *trix.DataObject, optimizer: *grad_mod.Adam) !f32 {
+    const network: *NeuralNetwork = @ptrCast(@alignCast(network_ptr));
+
+    network.zero_grad();
+
+    var prediction = try network.forward(allocator, input);
+    defer prediction.deinit();
+
+    prediction.enableGrad();
+    try prediction.ensureGradValue();
+
+    const loss = try grad_mod.meanSquaredError(&prediction, target);
+
+    var loss_grad = try trix.cloneTensor(allocator, &prediction);
+    defer loss_grad.deinit();
+    @memcpy(loss_grad.grad_value.?.items, prediction.grad_value.?.items);
+
+    try network.backward(allocator, &loss_grad);
+    try network.accumulateGradients(allocator, &prediction);
+    try network.update_parameters(optimizer);
+    return loss;
+}
+
 /// Simple neural network container with generic layer support
 pub const NeuralNetwork = struct {
     allocator: std.mem.Allocator,
     layers: std.array_list.Managed(*Layer),
     /// Per-layer outputs from the most recent `forward` call (owned until the next forward).
     activations: std.array_list.Managed(trix.DataObject),
+    forward_fn: NeuralNetworkForwardFn,
+    backward_fn: NeuralNetworkBackwardFn,
+    accumulate_gradients_fn: NeuralNetworkAccumulateGradientsFn,
+    train_step_fn: NeuralNetworkTrainStepFn,
 
     pub fn init(allocator: std.mem.Allocator) !NeuralNetwork {
         const layers = try std.array_list.Managed(*Layer).initCapacity(allocator, 10);
@@ -1341,6 +1487,10 @@ pub const NeuralNetwork = struct {
             .allocator = allocator,
             .layers = layers,
             .activations = activations,
+            .forward_fn = defaultNeuralNetworkForward,
+            .backward_fn = defaultNeuralNetworkBackward,
+            .accumulate_gradients_fn = defaultNeuralNetworkAccumulateGradients,
+            .train_step_fn = defaultNeuralNetworkTrainStep,
         };
     }
 
@@ -1363,60 +1513,36 @@ pub const NeuralNetwork = struct {
     }
 
     pub fn forward(self: *NeuralNetwork, allocator: std.mem.Allocator, input: ForwardInput) !trix.DataObject {
-        if (self.layers.items.len == 0) return error.EmptyNetwork;
-
-        self.clearActivations();
-
-        var output: trix.DataObject = undefined;
-        var owns_output = false;
-        var layer_index: usize = 0;
-
-        switch (input) {
-            .tensor => |t| {
-                output = try trix.DataObject.init(allocator, t.shape.?.items, .f32);
-                @memcpy(output.values.items, t.values.items);
-                owns_output = true;
-                layer_index = 0;
-            },
-            .sequence => |sequence| {
-                const first = self.layers.items[0];
-                output = try first.forwardSequence(allocator, sequence);
-                try cacheActivation(allocator, &self.activations, &output);
-                owns_output = true;
-                layer_index = 1;
-            },
-        }
-
-        while (layer_index < self.layers.items.len) : (layer_index += 1) {
-            const layer = self.layers.items[layer_index];
-            const next_output = try layer.forward(allocator, &output);
-            if (owns_output) {
-                output.deinit();
-            }
-            output = next_output;
-            owns_output = true;
-            try cacheActivation(allocator, &self.activations, &output);
-        }
-
-        return output;
+        return self.forward_fn(self, allocator, input);
     }
 
     /// Backward pass through all layers
     pub fn backward(self: *NeuralNetwork, allocator: std.mem.Allocator, loss_grad: *trix.DataObject) !void {
-        var grad = loss_grad.*;
+        return self.backward_fn(self, allocator, loss_grad);
+    }
 
-        // Backpropagate through layers in reverse order
-        var i: usize = self.layers.items.len;
-        while (i > 0) {
-            i -= 1;
-            const layer = self.layers.items[i];
-            const prev_grad = try layer.*.backprop(allocator, &grad);
-            if (i < self.layers.items.len - 1 or loss_grad.values.items.ptr != grad.values.items.ptr) {
-                grad.deinit();
-            }
-            grad = prev_grad;
-        }
-        grad.deinit();
+    pub fn accumulateGradients(self: *NeuralNetwork, allocator: std.mem.Allocator, output: *trix.DataObject) !void {
+        return self.accumulate_gradients_fn(self, allocator, output);
+    }
+
+    pub fn trainStep(self: *NeuralNetwork, allocator: std.mem.Allocator, input: ForwardInput, target: *trix.DataObject, optimizer: *grad_mod.Adam) !f32 {
+        return self.train_step_fn(self, allocator, input, target, optimizer);
+    }
+
+    pub fn setForwardFn(self: *NeuralNetwork, fn_ptr: NeuralNetworkForwardFn) void {
+        self.forward_fn = fn_ptr;
+    }
+
+    pub fn setBackwardFn(self: *NeuralNetwork, fn_ptr: NeuralNetworkBackwardFn) void {
+        self.backward_fn = fn_ptr;
+    }
+
+    pub fn setAccumulateGradientsFn(self: *NeuralNetwork, fn_ptr: NeuralNetworkAccumulateGradientsFn) void {
+        self.accumulate_gradients_fn = fn_ptr;
+    }
+
+    pub fn setTrainStepFn(self: *NeuralNetwork, fn_ptr: NeuralNetworkTrainStepFn) void {
+        self.train_step_fn = fn_ptr;
     }
 
     pub fn zero_grad(self: *NeuralNetwork) void {
@@ -1650,7 +1776,7 @@ pub const ResidualBlock = struct {
         defer y.deinit();
         var f = try self.main_2.forward(allocator, &y);
         defer f.deinit();
-        var skip_out = if (self.skip) |s| try s.forward(allocator, input) else try cloneTensor(allocator, input);
+        var skip_out = if (self.skip) |s| try s.forward(allocator, input) else try trix.cloneTensor(allocator, input);
         defer skip_out.deinit();
         return residualAdd(allocator, &skip_out, &f);
     }
@@ -1731,10 +1857,4 @@ fn softmaxRow(row: []f32) void {
         sum_exp += v.*;
     }
     for (row) |*v| v.* /= sum_exp;
-}
-
-fn cloneTensor(allocator: std.mem.Allocator, src: *trix.DataObject) !trix.DataObject {
-    const out = try trix.DataObject.init(allocator, src.shape.?.items, .f32);
-    @memcpy(out.values.items, src.values.items);
-    return out;
 }

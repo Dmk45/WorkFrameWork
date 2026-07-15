@@ -83,64 +83,6 @@ pub const EnergyLoadForecaster = struct {
         return output;
     }
 
-    fn accumulateBiasGrad(d_output: *const trix.DataObject, bias: *trix.DataObject) !void {
-        try bias.ensureGradValue();
-        const batch = d_output.shape.?.items[0];
-        const out_dim = d_output.shape.?.items[1];
-        const grads = if (d_output.grad_value) |g| g.items else d_output.values.items;
-        for (0..out_dim) |j| {
-            var acc: f32 = 0.0;
-            for (0..batch) |b| {
-                acc += grads[b * out_dim + j];
-            }
-            bias.grad_value.?.items[j] += acc;
-        }
-    }
-
-    /// Propagate MSE gradients into linear readout weights/bias using activations cached by `nn.forward`.
-    fn accumulateReadoutGrads(self: *EnergyLoadForecaster, allocator: std.mem.Allocator, d_output: *trix.DataObject) !void {
-        if (self.nn.activations.items.len < 3) return error.MissingActivations;
-
-        const lstm_cache = &self.nn.activations.items[0];
-        const h1_cache = &self.nn.activations.items[1];
-
-        var d_loss = try trix.DataObject.init(allocator, d_output.shape.?.items, .f32);
-        defer d_loss.deinit();
-        try d_output.ensureGradValue();
-        @memcpy(d_loss.values.items, d_output.grad_value.?.items);
-        d_loss.enableGrad();
-        try d_loss.ensureGradValue();
-        @memcpy(d_loss.grad_value.?.items, d_output.grad_value.?.items);
-
-        const readout2_layer = self.nn.get_layer(2) orelse return error.EmptyNetwork;
-        const linear2 = layers.Layer.child(layers.LinearLayer, readout2_layer);
-        try grad_math.matmulBackward(h1_cache, &linear2.weights, &d_loss, allocator);
-        try accumulateBiasGrad(&d_loss, &linear2.bias);
-
-        var w2_t = try modelwork2.core_math.transpose(allocator, &linear2.weights);
-        defer w2_t.deinit();
-        var d_h1 = try modelwork2.core_math.matmul(allocator, &d_loss, &w2_t);
-        defer d_h1.deinit();
-
-        const readout1_layer = self.nn.get_layer(1) orelse return error.EmptyNetwork;
-        const linear1 = layers.Layer.child(layers.LinearLayer, readout1_layer);
-        var d_lstm = try trix.DataObject.init(allocator, d_h1.shape.?.items, .f32);
-        defer d_lstm.deinit();
-        @memcpy(d_lstm.values.items, d_h1.values.items);
-
-        if (std.mem.eql(u8, linear1.config.activation, "relu")) {
-            h1_cache.enableGrad();
-            try h1_cache.ensureGradValue();
-            @memset(h1_cache.grad_value.?.items, 0.0);
-            try grad_math.reluBackward(h1_cache, &d_h1);
-            @memcpy(d_lstm.values.items, h1_cache.grad_value.?.items);
-        }
-
-        try grad_math.matmulBackward(lstm_cache, &linear1.weights, &d_lstm, allocator);
-        try accumulateBiasGrad(&d_lstm, &linear1.bias);
-    }
-
-    /// One training step: forward → MSE → backward through head → Adam update.
     pub fn trainStep(
         self: *EnergyLoadForecaster,
         allocator: std.mem.Allocator,
@@ -148,45 +90,13 @@ pub const EnergyLoadForecaster = struct {
         target: *trix.DataObject,
         optimizer: *grad.Adam,
     ) !f32 {
-        self.nn.zero_grad();
-
-        var prediction = try self.forward(allocator, sequence);
-        defer prediction.deinit();
-
-        const loss = try grad.meanSquaredError(&prediction, target);
-
-        var loss_grad = try cloneTensor(allocator, &prediction);
-        defer loss_grad.deinit();
-        @memcpy(loss_grad.grad_value.?.items, prediction.grad_value.?.items);
-
-        try self.nn.backward(allocator, &loss_grad);
-        try self.accumulateReadoutGrads(allocator, &prediction);
-
-        if (self.cfg.grad_clip_norm > 0) {
-            self.nn.clip_gradients(self.cfg.grad_clip_norm);
-        }
-
-        try self.nn.update_parameters(optimizer);
-        return loss;
+        return self.nn.trainStep(allocator, .{ .sequence = sequence }, target, optimizer);
     }
 
     pub fn deinit(self: *EnergyLoadForecaster) void {
         self.nn.deinit();
     }
 };
-
-fn cloneTensor(allocator: std.mem.Allocator, src: *const trix.DataObject) !trix.DataObject {
-    var copy = try trix.DataObject.init(allocator, src.shape.?.items, .f32);
-    @memcpy(copy.values.items, src.values.items);
-    if (src.grad) {
-        copy.enableGrad();
-        try copy.ensureGradValue();
-        if (src.grad_value) |g| {
-            @memcpy(copy.grad_value.?.items, g.items);
-        }
-    }
-    return copy;
-}
 
 /// Synthetic hourly meter readings: smooth load curve + temperature coupling.
 fn syntheticLoadAt(hour: usize, day_offset: usize) f32 {
@@ -296,4 +206,49 @@ test "energy load forecaster: forward output shape" {
     defer output.deinit();
 
     try std.testing.expectEqualSlices(usize, &[_]usize{ cfg.batch_size, 1 }, output.shape.?.items);
+}
+
+fn customTrainStep(
+    network_ptr: *anyopaque,
+    allocator: std.mem.Allocator,
+    input: layers.ForwardInput,
+    target: *trix.DataObject,
+    optimizer: *grad.Adam,
+) anyerror!f32 {
+    _ = network_ptr;
+    _ = allocator;
+    _ = input;
+    _ = target;
+    _ = optimizer;
+    return 1.5;
+}
+
+test "neural network hooks can be overridden and cloneTensor is reusable" {
+    const allocator = std.testing.allocator;
+
+    var nn = try layers.NeuralNetwork.init(allocator);
+    defer nn.deinit();
+
+    const layer = try layers.LinearLayer.init(allocator, 1, 1, "none", null, null);
+    try nn.add(layer);
+
+    var input = try trix.DataObject.init(allocator, &[_]usize{ 1, 1 }, .f32);
+    defer input.deinit();
+    input.values.items[0] = 2.0;
+
+    var clone = try trix.cloneTensor(allocator, &input);
+    defer clone.deinit();
+    try std.testing.expectEqual(@as(f32, 2.0), clone.values.items[0]);
+
+    nn.setTrainStepFn(customTrainStep);
+
+    var target = try trix.DataObject.init(allocator, &[_]usize{ 1, 1 }, .f32);
+    defer target.deinit();
+    target.values.items[0] = 1.0;
+
+    var optimizer = try grad.Adam.init(allocator, 0.01, 0.9, 0.999, 1e-8);
+    defer optimizer.deinit();
+
+    const loss = try nn.trainStep(allocator, .{ .tensor = &input }, &target, &optimizer);
+    try std.testing.expectEqual(@as(f32, 1.5), loss);
 }

@@ -4,11 +4,10 @@ import argparse
 import json
 import logging
 import os
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
-opa
 import requests
-from pydantic import BaseModel, Field
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -16,13 +15,14 @@ logger = logging.getLogger(__name__)
 DEFAULT_API_BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
 
 
-class TradeRecord(BaseModel):
+@dataclass
+class TradeRecord:
     """A single trade event for a Kalshi ticket."""
 
     timestamp: datetime
     quantity: float
-    position: str = Field(..., description="yes or no")
-    action: str = Field(..., description="buy or sell")
+    position: str
+    action: str
     probability: float
     price: float
     ticket_id: Optional[str] = None
@@ -31,7 +31,8 @@ class TradeRecord(BaseModel):
     time_since_previous_trade_seconds: Optional[float] = None
 
 
-class TicketHistory(BaseModel):
+@dataclass
+class TicketHistory:
     """All trades observed for one ticket, with a time-span label."""
 
     ticket_id: str
@@ -42,7 +43,7 @@ class TicketHistory(BaseModel):
     first_trade_timestamp: Optional[datetime] = None
     last_trade_timestamp: Optional[datetime] = None
     time_traversed_days: float = 0.0
-    trades: List[TradeRecord] = Field(default_factory=list)
+    trades: List[TradeRecord] = field(default_factory=list)
     backfill_source_ticket_id: Optional[str] = None
     backfill_time_days: float = 0.0
     label: str = ""
@@ -100,7 +101,8 @@ class TicketHistory(BaseModel):
         return payload
 
 
-class TrainingExample(BaseModel):
+@dataclass
+class TrainingExample:
     """A single row suitable for training a binary classifier or regressor."""
 
     ticket_id: str
@@ -126,11 +128,13 @@ class KalshiHistoricalDataBuilder:
         api_key: Optional[str] = None,
         timeout: int = 20,
         use_offline: bool = False,
+        max_trades: int = 20000,
     ) -> None:
         self.api_base_url = api_base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
         self.use_offline = use_offline
+        self.max_trades = max(1, max_trades)
 
         if not self.use_offline and self.api_base_url != DEFAULT_API_BASE_URL:
             raise ValueError(
@@ -228,7 +232,7 @@ class KalshiHistoricalDataBuilder:
         if self.use_offline:
             return self._offline_ticket_payloads(crypto, days)
 
-        trade_based_payloads = self._fetch_ticket_payloads_from_trades(crypto)
+        trade_based_payloads = self._fetch_ticket_payloads_from_trades(crypto, days)
         if trade_based_payloads:
             logger.info(
                 "Fetched %s ticket payloads directly from /markets/trades for %s",
@@ -284,6 +288,7 @@ class KalshiHistoricalDataBuilder:
         path: str,
         params: Optional[Dict[str, Any]] = None,
         items_key: Optional[str] = None,
+        max_items: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         all_items: List[Dict[str, Any]] = []
         params = dict(params or {})
@@ -317,6 +322,8 @@ class KalshiHistoricalDataBuilder:
 
             if isinstance(items, list):
                 all_items.extend([item for item in items if isinstance(item, dict)])
+                if max_items is not None and len(all_items) >= max_items:
+                    return all_items[:max_items]
 
             cursor = payload.get("cursor")
             if not cursor:
@@ -324,20 +331,26 @@ class KalshiHistoricalDataBuilder:
 
         return all_items
 
-    def _fetch_ticket_payloads_from_trades(self, crypto: str) -> List[Dict[str, Any]]:
+    def _fetch_ticket_payloads_from_trades(self, crypto: str, days: int) -> List[Dict[str, Any]]:
+        min_ts = int((datetime.now(timezone.utc) - timedelta(days=max(1, days))).timestamp())
         param_variants = [
-            {"event_ticker_symbol": crypto, "limit": 1000},
-            {"ticker": crypto, "limit": 1000},
-            {"market_ticker": crypto, "limit": 1000},
-            {"event_ticker": crypto, "limit": 1000},
-            {"query": crypto, "limit": 1000},
-            {"search": crypto, "limit": 1000},
+            {"event_ticker_symbol": crypto, "limit": 500, "min_ts": min_ts},
+            {"ticker": crypto, "limit": 500, "min_ts": min_ts},
+            {"market_ticker": crypto, "limit": 500, "min_ts": min_ts},
+            {"event_ticker": crypto, "limit": 500, "min_ts": min_ts},
+            {"query": crypto, "limit": 500, "min_ts": min_ts},
+            {"search": crypto, "limit": 500, "min_ts": min_ts},
         ]
 
         trades_by_id: Dict[str, Dict[str, Any]] = {}
         for params in param_variants:
             try:
-                trades = self._fetch_paginated_items("/markets/trades", params=params, items_key="trades")
+                trades = self._fetch_paginated_items(
+                    "/markets/trades",
+                    params=params,
+                    items_key="trades",
+                    max_items=self.max_trades,
+                )
             except Exception as exc:
                 logger.warning("Failed to fetch live trades for %s with params=%s: %s", crypto, params, exc)
                 continue
@@ -348,6 +361,11 @@ class KalshiHistoricalDataBuilder:
                 if trade_id is None:
                     continue
                 trades_by_id[str(trade_id)] = raw_trade
+                if len(trades_by_id) >= self.max_trades:
+                    logger.warning("Reached --max-trades=%s while fetching %s; stopping early.", self.max_trades, crypto)
+                    break
+            if len(trades_by_id) >= self.max_trades:
+                break
 
         if not trades_by_id:
             return []
@@ -735,11 +753,21 @@ class KalshiHistoricalDataBuilder:
         return max(0.0, delta.total_seconds() / 86400.0)
 
 
-def build_dataset(crypto: str, days: int, output_path: str, api_key: Optional[str], api_base_url: str, use_offline: bool, raw_only: bool = False) -> Dict[str, Any]:
+def build_dataset(
+    crypto: str,
+    days: int,
+    output_path: str,
+    api_key: Optional[str],
+    api_base_url: str,
+    use_offline: bool,
+    raw_only: bool = False,
+    max_trades: int = 20000,
+) -> Dict[str, Any]:
     builder = KalshiHistoricalDataBuilder(
         api_base_url=api_base_url,
         api_key=api_key,
         use_offline=use_offline,
+        max_trades=max_trades,
     )
     dataset = builder.build_dataset(crypto, days, raw_only=raw_only)
     with open(output_path, "w", encoding="utf-8") as handle:
@@ -756,6 +784,7 @@ def main() -> None:
     parser.add_argument("--api-base-url", default=DEFAULT_API_BASE_URL, help="Kalshi API base URL; live mode only supports the default Kalshi endpoint")
     parser.add_argument("--offline", action="store_true", help="Use an embedded sample dataset when no live API is available")
     parser.add_argument("--raw-only", action="store_true", help="Emit a simpler raw-series format instead of the ticket-centric structure")
+    parser.add_argument("--max-trades", type=int, default=20000, help="Maximum live trades to fetch before building the dataset")
     args = parser.parse_args()
 
     dataset = build_dataset(
@@ -766,6 +795,7 @@ def main() -> None:
         api_base_url=args.api_base_url,
         use_offline=args.offline,
         raw_only=args.raw_only,
+        max_trades=args.max_trades,
     )
     ticket_count = len(dataset.get("ticket_histories", []))
     print(json.dumps({"rows": len(dataset["training_rows"]), "tickets": ticket_count, "output": args.output}, indent=2))
