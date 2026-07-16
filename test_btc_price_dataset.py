@@ -9,10 +9,10 @@ from btc_price_dataset import CryptoPriceDatasetBuilder, split_targets
 
 class FixtureCryptoPriceDatasetBuilder(CryptoPriceDatasetBuilder):
     def __init__(self, trades):
-        super().__init__()
+        super().__init__(request_delay=0.0)
         self.trades = trades
 
-    def fetch_trades(self, product, window_start, window_end):
+    def fetch_price_points(self, product, window_start, window_end, *, use_candles, candle_granularity_seconds=60):
         return [
             trade
             for trade in self.trades
@@ -61,7 +61,14 @@ class CryptoPriceDatasetTests(unittest.TestCase):
         self.assertTrue(all("timestamp" in row and "price" in row for row in dataset["y_train"]))
         self.assertNotIn("prices", dataset)
 
-    def test_align_with_kalshi_training_rows(self) -> None:
+    def test_auto_price_source_uses_candles_for_long_or_aligned_windows(self) -> None:
+        builder = CryptoPriceDatasetBuilder(request_delay=0.0)
+        self.assertTrue(builder._should_use_candles("auto", days=120, aligned=True))
+        self.assertTrue(builder._should_use_candles("auto", days=30, aligned=False))
+        self.assertFalse(builder._should_use_candles("auto", days=3, aligned=False))
+        self.assertTrue(builder._should_use_candles("candles", days=1, aligned=False))
+        self.assertFalse(builder._should_use_candles("trades", days=120, aligned=True))
+
         base = datetime(2026, 7, 16, 18, 0, tzinfo=timezone.utc)
         trades = [
             {
