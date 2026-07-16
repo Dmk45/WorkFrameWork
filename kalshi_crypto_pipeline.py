@@ -44,8 +44,6 @@ class TicketHistory:
     last_trade_timestamp: Optional[datetime] = None
     time_traversed_days: float = 0.0
     trades: List[TradeRecord] = field(default_factory=list)
-    backfill_source_ticket_id: Optional[str] = None
-    backfill_time_days: float = 0.0
     label: str = ""
 
     @property
@@ -79,8 +77,6 @@ class TicketHistory:
             "last_trade_timestamp": self.last_trade_timestamp.isoformat() if self.last_trade_timestamp else None,
             "open_timestamp": self.open_timestamp.isoformat() if self.open_timestamp else None,
             "close_timestamp": self.close_timestamp.isoformat() if self.close_timestamp else None,
-            "backfill_source_ticket_id": self.backfill_source_ticket_id,
-            "backfill_time_days": round(self.backfill_time_days, 3),
         }
         if include_trades:
             payload["trades"] = [
@@ -116,7 +112,6 @@ class TrainingExample:
     time_since_open_hours: float
     ticket_time_span_days: float
     target: int
-    source_ticket_id: Optional[str] = None
 
 
 class KalshiHistoricalDataBuilder:
@@ -127,27 +122,32 @@ class KalshiHistoricalDataBuilder:
         api_base_url: str,
         api_key: Optional[str] = None,
         timeout: int = 20,
-        use_offline: bool = False,
         max_trades: int = 20000,
     ) -> None:
         self.api_base_url = api_base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
-        self.use_offline = use_offline
         self.max_trades = max(1, max_trades)
 
-        if not self.use_offline and self.api_base_url != DEFAULT_API_BASE_URL:
+        if self.api_base_url != DEFAULT_API_BASE_URL:
             raise ValueError(
                 "Live mode only supports the Kalshi API at "
-                f"{DEFAULT_API_BASE_URL}. Set --offline to use embedded sample data."
+                f"{DEFAULT_API_BASE_URL}."
             )
 
         self.session = requests.Session()
 
     def build_dataset(self, crypto: str, days: int, raw_only: bool = False) -> Dict[str, Any]:
-        logger.info("Building dataset for %s over %s days", crypto, days)
-        ticket_payloads = self._fetch_ticket_payloads(crypto, days)
-        if not ticket_payloads and not self.use_offline:
+        window_start, window_end = self._lookback_window(days)
+        logger.info(
+            "Building dataset for %s over %s days (%s to %s)",
+            crypto,
+            days,
+            window_start.isoformat(),
+            window_end.isoformat(),
+        )
+        ticket_payloads = self._fetch_ticket_payloads(crypto, days, window_start, window_end)
+        if not ticket_payloads:
             raise RuntimeError(
                 "No live Kalshi ticket payloads were available. "
                 "Ensure the Kalshi API is reachable and the crypto filter is correct."
@@ -156,39 +156,22 @@ class KalshiHistoricalDataBuilder:
         tickets: List[TicketHistory] = []
 
         for payload in ticket_payloads:
-            ticket = self._build_ticket_history(payload, crypto)
+            ticket = self._build_ticket_history(payload, crypto, window_start, window_end)
             if not ticket.trades:
                 continue
             tickets.append(ticket)
         logger.info("Built %s candidate tickets with trade history", len(tickets))
 
-        if not tickets and not self.use_offline:
+        if not tickets:
             raise RuntimeError(
                 "No live ticket histories with trades were built. "
                 "The Kalshi live trade endpoints returned no usable trades for the requested crypto."
             )
 
-        # Fill gaps in time coverage when possible.
-        target_span = max(days, 1)
-        filled_tickets: List[TicketHistory] = []
-        for ticket in tickets:
-            if ticket.time_traversed_days >= target_span:
-                filled_tickets.append(ticket)
-                continue
-            similar = self._find_similar_ticket(ticket, tickets)
-            if similar is None:
-                filled_tickets.append(ticket)
-                continue
-            combined = self._concatenate_ticket_histories(ticket, similar)
-            if combined is not None:
-                filled_tickets.append(combined)
-            else:
-                filled_tickets.append(ticket)
-
-        training_rows = self._build_training_rows(filled_tickets)
+        training_rows = self._build_training_rows(tickets)
 
         latest_trade: Optional[TradeRecord] = None
-        for ticket in filled_tickets:
+        for ticket in tickets:
             if ticket.trades:
                 candidate = ticket.trades[-1]
                 if latest_trade is None or candidate.timestamp > latest_trade.timestamp:
@@ -210,29 +193,38 @@ class KalshiHistoricalDataBuilder:
             return {
                 "crypto": crypto,
                 "requested_days": days,
+                "window_start": window_start.isoformat(),
+                "window_end": window_end.isoformat(),
                 "training_rows": [self._row_to_dict(row) for row in training_rows],
                 "notes": [
                     "This export uses the raw trade-row format for direct time-series training.",
-                    "It drops the ticket-spanning backfill logic and is better suited to simple forecasting tasks.",
+                    "Trades are restricted to the requested rolling lookback window ending at export time.",
+                    "Rows are built only from live Kalshi API trade payloads.",
                 ],
             }
 
         return {
             "crypto": crypto,
             "requested_days": days,
-            "ticket_histories": [ticket.to_dict(include_trades=True) for ticket in filled_tickets],
+            "window_start": window_start.isoformat(),
+            "window_end": window_end.isoformat(),
+            "ticket_histories": [ticket.to_dict(include_trades=True) for ticket in tickets],
             "training_rows": [self._row_to_dict(row) for row in training_rows],
             "notes": [
                 "The dataset is ticket-centric and preserves buy/sell and yes/no labels.",
-                "When a ticket lacks enough temporal coverage, a similar earlier ticket may be used as a backfill source.",
+                "Trades are restricted to the requested rolling lookback window ending at export time.",
+                "Rows are built only from live Kalshi API trade payloads.",
             ],
         }
 
-    def _fetch_ticket_payloads(self, crypto: str, days: int) -> List[Dict[str, Any]]:
-        if self.use_offline:
-            return self._offline_ticket_payloads(crypto, days)
-
-        trade_based_payloads = self._fetch_ticket_payloads_from_trades(crypto, days)
+    def _fetch_ticket_payloads(
+        self,
+        crypto: str,
+        days: int,
+        window_start: datetime,
+        window_end: datetime,
+    ) -> List[Dict[str, Any]]:
+        trade_based_payloads = self._fetch_ticket_payloads_from_trades(crypto, window_start, window_end)
         if trade_based_payloads:
             logger.info(
                 "Fetched %s ticket payloads directly from /markets/trades for %s",
@@ -256,7 +248,13 @@ class KalshiHistoricalDataBuilder:
                 items = self._fetch_paginated_items(endpoint, params=params)
                 logger.info("Fetched %s items from %s with params=%s", len(items), endpoint, params)
                 if items:
-                    return [self._normalise_ticket_payload(item) for item in items]
+                    matching_payloads = [
+                        self._normalise_ticket_payload(item)
+                        for item in items
+                        if self._payload_matches_crypto(item, crypto)
+                    ]
+                    if matching_payloads:
+                        return matching_payloads
             except Exception as exc:  # pragma: no cover - defensive path
                 logger.warning("Endpoint %s failed with %s", endpoint, exc)
 
@@ -331,15 +329,21 @@ class KalshiHistoricalDataBuilder:
 
         return all_items
 
-    def _fetch_ticket_payloads_from_trades(self, crypto: str, days: int) -> List[Dict[str, Any]]:
-        min_ts = int((datetime.now(timezone.utc) - timedelta(days=max(1, days))).timestamp())
+    def _fetch_ticket_payloads_from_trades(
+        self,
+        crypto: str,
+        window_start: datetime,
+        window_end: datetime,
+    ) -> List[Dict[str, Any]]:
+        min_ts = int(window_start.timestamp())
+        max_ts = int(window_end.timestamp())
         param_variants = [
-            {"event_ticker_symbol": crypto, "limit": 500, "min_ts": min_ts},
-            {"ticker": crypto, "limit": 500, "min_ts": min_ts},
-            {"market_ticker": crypto, "limit": 500, "min_ts": min_ts},
-            {"event_ticker": crypto, "limit": 500, "min_ts": min_ts},
-            {"query": crypto, "limit": 500, "min_ts": min_ts},
-            {"search": crypto, "limit": 500, "min_ts": min_ts},
+            {"event_ticker_symbol": crypto, "limit": 500, "min_ts": min_ts, "max_ts": max_ts},
+            {"ticker": crypto, "limit": 500, "min_ts": min_ts, "max_ts": max_ts},
+            {"market_ticker": crypto, "limit": 500, "min_ts": min_ts, "max_ts": max_ts},
+            {"event_ticker": crypto, "limit": 500, "min_ts": min_ts, "max_ts": max_ts},
+            {"query": crypto, "limit": 500, "min_ts": min_ts, "max_ts": max_ts},
+            {"search": crypto, "limit": 500, "min_ts": min_ts, "max_ts": max_ts},
         ]
 
         trades_by_id: Dict[str, Dict[str, Any]] = {}
@@ -356,6 +360,11 @@ class KalshiHistoricalDataBuilder:
                 continue
             for raw_trade in trades:
                 if not isinstance(raw_trade, dict):
+                    continue
+                trade_time = self._trade_timestamp(raw_trade)
+                if trade_time is None or not self._in_window(trade_time, window_start, window_end):
+                    continue
+                if not self._payload_matches_crypto(raw_trade, crypto):
                     continue
                 trade_id = self._first_present(raw_trade, ["trade_id", "id", "uuid", "order_id"])
                 if trade_id is None:
@@ -422,7 +431,13 @@ class KalshiHistoricalDataBuilder:
             "trades": [],
         }
 
-    def _build_ticket_history(self, payload: Dict[str, Any], crypto: str) -> TicketHistory:
+    def _build_ticket_history(
+        self,
+        payload: Dict[str, Any],
+        crypto: str,
+        window_start: datetime,
+        window_end: datetime,
+    ) -> TicketHistory:
         if "market" in payload and isinstance(payload["market"], dict):
             payload = payload["market"]
 
@@ -436,17 +451,17 @@ class KalshiHistoricalDataBuilder:
 
         trades: List[TradeRecord] = []
         raw_trades = payload.get("trades") or []
-        if not raw_trades and not self.use_offline:
+        if not raw_trades:
             try:
-                raw_trades = self._fetch_trade_history(ticket_id, open_dt, close_dt)
+                raw_trades = self._fetch_trade_history(ticket_id, window_start, window_end)
             except Exception as exc:  # pragma: no cover - defensive path
                 logger.warning("Unable to fetch trade history for %s: %s", ticket_id, exc)
 
-        if not raw_trades and self.use_offline:
-            raw_trades = self._offline_trades(ticket_id, open_dt or datetime.now(timezone.utc))
-        elif not raw_trades:
-            logger.info("No live trades found for %s and offline fallback is disabled.", ticket_id)
+        if not raw_trades:
+            logger.info("No live trades found for %s.", ticket_id)
             raw_trades = []
+
+        raw_trades = self._filter_trades_to_window(raw_trades, window_start, window_end)
 
         logger.info(
             "Ticket %s: raw_trades=%s open=%s close=%s",
@@ -478,8 +493,6 @@ class KalshiHistoricalDataBuilder:
         first_trade = trades[0].timestamp
         last_trade = trades[-1].timestamp
         time_span_days = self._time_span_days(first_trade, last_trade)
-        if open_dt and close_dt:
-            time_span_days = max(time_span_days, self._time_span_days(open_dt, close_dt))
 
         return TicketHistory(
             ticket_id=str(ticket_id),
@@ -503,14 +516,19 @@ class KalshiHistoricalDataBuilder:
         param_keys = ["market_ticker", "ticker", "event_ticker", "event_ticker_symbol", "id"]
 
         for key in param_keys:
-            params: Dict[str, Any] = {key: ticket_id, "limit": 1000}
+            params: Dict[str, Any] = {key: ticket_id, "limit": 500}
             if open_timestamp is not None:
                 params["min_ts"] = int(open_timestamp.timestamp())
             if close_timestamp is not None:
                 params["max_ts"] = int(close_timestamp.timestamp())
 
             try:
-                items = self._fetch_paginated_items("/markets/trades", params=params, items_key="trades")
+                items = self._fetch_paginated_items(
+                    "/markets/trades",
+                    params=params,
+                    items_key="trades",
+                    max_items=self.max_trades,
+                )
                 if items:
                     logger.info("Fetched %s trades for %s using %s", len(items), ticket_id, key)
                     return items
@@ -518,6 +536,58 @@ class KalshiHistoricalDataBuilder:
                 logger.warning("Trade history endpoint /markets/trades failed for %s=%s: %s", key, ticket_id, exc)
 
         return []
+
+    def _lookback_window(self, days: int) -> tuple[datetime, datetime]:
+        window_end = datetime.now(timezone.utc)
+        window_start = window_end - timedelta(days=max(1, days))
+        return window_start, window_end
+
+    def _trade_timestamp(self, raw_trade: Dict[str, Any]) -> Optional[datetime]:
+        return self._parse_time(
+            self._first_present(
+                raw_trade,
+                ["created_time", "timestamp", "created_at", "time", "date", "trade_time", "updated_at"],
+            )
+        )
+
+    def _payload_matches_crypto(self, payload: Dict[str, Any], crypto: str) -> bool:
+        if "market" in payload and isinstance(payload["market"], dict):
+            payload = payload["market"]
+
+        target = crypto.upper()
+        fields = [
+            "ticker",
+            "market_ticker",
+            "event_ticker",
+            "event_ticker_symbol",
+            "series_ticker",
+            "ticket_id",
+            "id",
+            "market_id",
+        ]
+        return any(target in str(payload.get(field, "")).upper() for field in fields)
+
+    def _in_window(self, timestamp: datetime, window_start: datetime, window_end: datetime) -> bool:
+        timestamp = timestamp if timestamp.tzinfo else timestamp.replace(tzinfo=timezone.utc)
+        return window_start <= timestamp <= window_end
+
+    def _filter_trades_to_window(
+        self,
+        raw_trades: List[Dict[str, Any]],
+        window_start: datetime,
+        window_end: datetime,
+    ) -> List[Dict[str, Any]]:
+        filtered = [
+            raw_trade
+            for raw_trade in raw_trades
+            if isinstance(raw_trade, dict)
+            and (trade_time := self._trade_timestamp(raw_trade)) is not None
+            and self._in_window(trade_time, window_start, window_end)
+        ]
+        dropped = len(raw_trades) - len(filtered)
+        if dropped:
+            logger.info("Dropped %s trades outside the requested lookback window.", dropped)
+        return filtered
 
     def _normalise_trade_record(
         self,
@@ -529,18 +599,13 @@ class KalshiHistoricalDataBuilder:
         if not isinstance(raw_trade, dict):
             return None
 
-        timestamp = self._parse_time(
-            self._first_present(
-                raw_trade,
-                ["created_time", "timestamp", "created_at", "time", "date", "trade_time", "updated_at"],
-            )
-        )
+        timestamp = self._trade_timestamp(raw_trade)
         if timestamp is None:
             return None
 
         quantity = self._coerce_float(self._first_present(raw_trade, ["count_fp", "quantity", "size", "amount", "qty"]))
         if quantity is None:
-            quantity = 1.0
+            return None
 
         price = self._coerce_float(self._first_present(raw_trade, ["yes_price_dollars", "price", "mid_price", "probability", "prob", "value"]))
         if price is None:
@@ -548,12 +613,14 @@ class KalshiHistoricalDataBuilder:
             if no_price is not None:
                 price = max(0.0, min(1.0, 1.0 - no_price))
             else:
-                price = 0.5
+                return None
 
         probability = price
 
         position = self._infer_position(raw_trade)
         action = self._infer_action(raw_trade)
+        if position is None or action is None:
+            return None
 
         probability_change = 0.0
         time_since_previous_trade_seconds = None
@@ -574,7 +641,7 @@ class KalshiHistoricalDataBuilder:
             time_since_previous_trade_seconds=time_since_previous_trade_seconds,
         )
 
-    def _infer_position(self, raw_trade: Dict[str, Any]) -> str:
+    def _infer_position(self, raw_trade: Dict[str, Any]) -> Optional[str]:
         raw_position = str(
             self._first_present(raw_trade, ["taker_outcome_side", "yes_no", "position", "side", "direction", "contract"]) or ""
         ).lower()
@@ -582,9 +649,9 @@ class KalshiHistoricalDataBuilder:
             return "yes"
         if "no" in raw_position:
             return "no"
-        return "yes"
+        return None
 
-    def _infer_action(self, raw_trade: Dict[str, Any]) -> str:
+    def _infer_action(self, raw_trade: Dict[str, Any]) -> Optional[str]:
         raw_action = str(
             self._first_present(raw_trade, ["action", "taker_book_side", "side", "trade_type", "order_type"]) or ""
         ).lower()
@@ -592,35 +659,7 @@ class KalshiHistoricalDataBuilder:
             return "sell"
         if "buy" in raw_action or raw_action == "long" or raw_action == "bid":
             return "buy"
-        return "buy"
-
-    def _find_similar_ticket(self, target: TicketHistory, tickets: List[TicketHistory]) -> Optional[TicketHistory]:
-        matching = [ticket for ticket in tickets if ticket.ticket_id != target.ticket_id and ticket.event_ticker == target.event_ticker]
-        if not matching:
-            return None
-        matching.sort(key=lambda item: (item.last_trade_timestamp or datetime.now(timezone.utc), item.time_traversed_days), reverse=True)
-        return matching[0]
-
-    def _concatenate_ticket_histories(self, target: TicketHistory, source: TicketHistory) -> Optional[TicketHistory]:
-        if not source.trades:
-            return None
-        combined_trades = source.trades + target.trades
-        combined_trades = sorted(combined_trades, key=lambda item: item.timestamp)
-        combined = TicketHistory(
-            ticket_id=f"{target.ticket_id}+{source.ticket_id}",
-            event_ticker=target.event_ticker,
-            event_title=target.event_title or source.event_title,
-            open_timestamp=source.open_timestamp or target.open_timestamp,
-            close_timestamp=target.close_timestamp or source.close_timestamp,
-            first_trade_timestamp=combined_trades[0].timestamp,
-            last_trade_timestamp=combined_trades[-1].timestamp,
-            time_traversed_days=self._time_span_days(combined_trades[0].timestamp, combined_trades[-1].timestamp),
-            trades=combined_trades,
-            backfill_source_ticket_id=source.ticket_id,
-            backfill_time_days=self._time_span_days(source.first_trade_timestamp or source.last_trade_timestamp or source.open_timestamp or datetime.now(timezone.utc), source.last_trade_timestamp or source.first_trade_timestamp or source.open_timestamp or datetime.now(timezone.utc)),
-            label=f"{target.label}::backfilled-from-{source.ticket_id}",
-        )
-        return combined
+        return None
 
     def _row_to_dict(self, row: TrainingExample) -> Dict[str, Any]:
         return {
@@ -635,7 +674,6 @@ class KalshiHistoricalDataBuilder:
             "time_since_open_hours": row.time_since_open_hours,
             "ticket_time_span_days": row.ticket_time_span_days,
             "target": row.target,
-            "source_ticket_id": row.source_ticket_id,
         }
 
     def _build_training_rows(self, tickets: List[TicketHistory]) -> List[TrainingExample]:
@@ -664,50 +702,9 @@ class KalshiHistoricalDataBuilder:
                         time_since_open_hours=time_since_open_hours,
                         ticket_time_span_days=ticket.time_traversed_days,
                         target=target,
-                        source_ticket_id=ticket.backfill_source_ticket_id,
                     )
                 )
         return rows
-
-    def _offline_ticket_payloads(self, crypto: str, days: int) -> List[Dict[str, Any]]:
-        anchor = datetime.now(timezone.utc)
-        return [
-            {
-                "ticket_id": "BTC-001",
-                "event_ticker": crypto,
-                "event_title": f"Will {crypto} be above 90k at 9pm ET?",
-                "open_timestamp": (anchor - timedelta(days=max(days, 7))).isoformat(),
-                "close_timestamp": (anchor + timedelta(days=1)).isoformat(),
-                "trades": self._offline_trades("BTC-001", anchor),
-            },
-            {
-                "ticket_id": "BTC-002",
-                "event_ticker": crypto,
-                "event_title": f"Will {crypto} be above 95k at 9pm ET?",
-                "open_timestamp": (anchor - timedelta(days=max(days - 2, 3))).isoformat(),
-                "close_timestamp": (anchor + timedelta(days=2)).isoformat(),
-                "trades": self._offline_trades("BTC-002", anchor),
-            },
-        ]
-
-    def _offline_trades(self, ticket_id: str, base_time: datetime) -> List[Dict[str, Any]]:
-        base = base_time if base_time.tzinfo else base_time.replace(tzinfo=timezone.utc)
-        trades: List[Dict[str, Any]] = []
-        for offset in range(0, 5):
-            ts = base - timedelta(hours=12 * offset)
-            probability = 0.52 + (offset * 0.01)
-            trades.append(
-                {
-                    "timestamp": ts.isoformat(),
-                    "quantity": 1.0 + offset,
-                    "position": "yes" if offset % 2 == 0 else "no",
-                    "action": "buy" if offset % 2 == 0 else "sell",
-                    "probability": probability,
-                    "price": probability,
-                    "trade_id": f"{ticket_id}-{offset}",
-                }
-            )
-        return trades
 
     def _first_present(self, item: Dict[str, Any], keys: List[str]) -> Any:
         for key in keys:
@@ -759,14 +756,12 @@ def build_dataset(
     output_path: str,
     api_key: Optional[str],
     api_base_url: str,
-    use_offline: bool,
     raw_only: bool = False,
     max_trades: int = 20000,
 ) -> Dict[str, Any]:
     builder = KalshiHistoricalDataBuilder(
         api_base_url=api_base_url,
         api_key=api_key,
-        use_offline=use_offline,
         max_trades=max_trades,
     )
     dataset = builder.build_dataset(crypto, days, raw_only=raw_only)
@@ -782,7 +777,6 @@ def main() -> None:
     parser.add_argument("--output", default="kalshi_training_dataset.json", help="Path to write the JSON payload")
     parser.add_argument("--api-key", default=os.getenv("KALSHI_API_KEY"), help="Optional Kalshi API key")
     parser.add_argument("--api-base-url", default=DEFAULT_API_BASE_URL, help="Kalshi API base URL; live mode only supports the default Kalshi endpoint")
-    parser.add_argument("--offline", action="store_true", help="Use an embedded sample dataset when no live API is available")
     parser.add_argument("--raw-only", action="store_true", help="Emit a simpler raw-series format instead of the ticket-centric structure")
     parser.add_argument("--max-trades", type=int, default=20000, help="Maximum live trades to fetch before building the dataset")
     args = parser.parse_args()
@@ -793,7 +787,6 @@ def main() -> None:
         output_path=args.output,
         api_key=args.api_key,
         api_base_url=args.api_base_url,
-        use_offline=args.offline,
         raw_only=args.raw_only,
         max_trades=args.max_trades,
     )
