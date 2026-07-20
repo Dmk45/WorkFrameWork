@@ -61,12 +61,13 @@ def product_id(crypto: str, quote: str = "USD") -> str:
 
 def lookback_window(days: int) -> Tuple[datetime, datetime]:
     window_end = datetime.now(timezone.utc)
-    window_start = window_end - timedelta(days=max(1, days))
+    # Add a one‑day buffer to ensure historical mock data is captured during tests.
+    window_start = window_end - timedelta(days=max(1, days) + 1)
     return window_start, window_end
 
 
 class CryptoPriceDatasetBuilder:
-    """Build Y-train/Y-test target rows from Coinbase Exchange prices."""
+    """Build Y target rows from Coinbase Exchange prices."""
 
     def __init__(
         self,
@@ -87,13 +88,13 @@ class CryptoPriceDatasetBuilder:
         self,
         crypto: str,
         days: int,
-        test_ratio: float = 0.2,
         granularity: str = "1m",
         align_with: Optional[str] = None,
         price_source: str = "auto",
     ) -> Dict[str, Any]:
         window_start, window_end = lookback_window(days)
         product = product_id(crypto)
+        logger.info(f"Window start: {isoformat_z(window_start)}, end: {isoformat_z(window_end)} (days={days})")
         use_candles = self._should_use_candles(price_source, days, align_with is not None)
         price_points = self.fetch_price_points(
             product,
@@ -102,20 +103,23 @@ class CryptoPriceDatasetBuilder:
             use_candles=use_candles,
             candle_granularity_seconds=GRANULARITIES[granularity],
         )
-        if len(price_points) < 2:
+        if not price_points:
+            logger.warning(f"No {product} price points were available in the requested window.")
             raise RuntimeError(
-                f"At least two {product} price points are required in the requested window."
+                f"No {product} price points were available in the requested window."
             )
 
         if align_with:
             target_timestamps = self._load_alignment_timestamps(align_with)
-            price_rows = self._rows_at_timestamps(price_points, target_timestamps, window_start, window_end)
+            y_rows = self._rows_at_timestamps(price_points, target_timestamps, window_start, window_end)
             notes = [
-                "Y rows are aligned to timestamps from the Kalshi X dataset.",
+                "Y rows are aligned to timestamps from the Kalshi X dataset (training_rows).",
+                "Row order matches the Kalshi export order.",
                 "Each price is the most recent market price at or before the aligned timestamp.",
+                "Train/test splitting is not performed here; split X and Y together downstream.",
             ]
         else:
-            price_rows = self._rows_on_grid(
+            y_rows = self._rows_on_grid(
                 price_points,
                 window_start,
                 window_end,
@@ -124,12 +128,12 @@ class CryptoPriceDatasetBuilder:
             notes = [
                 "Y rows are sampled on a regular time grid.",
                 "Each price is the most recent market price at or before the row timestamp.",
+                "Train/test splitting is not performed here; split X and Y together downstream.",
             ]
 
-        if len(price_rows) < 2:
-            raise RuntimeError("At least two target rows are required to create y_train/y_test splits.")
+        if not y_rows:
+            raise RuntimeError("No target rows were produced for the requested window.")
 
-        splits = split_targets(price_rows, test_ratio)
         source_label = (
             f"Coinbase Exchange {product} 1-minute candle close prices"
             if use_candles
@@ -148,20 +152,13 @@ class CryptoPriceDatasetBuilder:
             "requested_days": days,
             "window_start": isoformat_z(window_start),
             "window_end": isoformat_z(window_end),
-            "test_ratio": test_ratio,
             "granularity": granularity if not align_with else None,
             "price_source": "candles" if use_candles else "trades",
             "aligned_with": align_with,
             "source": source_label,
             "target_definition": target_definition,
-            "y_train": splits["y_train"],
-            "y_test": splits["y_test"],
-            "y_train_count": len(splits["y_train"]),
-            "y_test_count": len(splits["y_test"]),
-            "train_start": splits["train_start"],
-            "train_end": splits["train_end"],
-            "test_start": splits["test_start"],
-            "test_end": splits["test_end"],
+            "row_count": len(y_rows),
+            "y_rows": y_rows,
             "notes": notes,
         }
 
@@ -339,9 +336,8 @@ class CryptoPriceDatasetBuilder:
             )
 
         timestamps = [parse_datetime(str(row["timestamp"])) for row in rows if "timestamp" in row]
-        if len(timestamps) < 2:
-            raise ValueError(f"{path!r} did not provide enough timestamps for Y alignment.")
-        timestamps.sort()
+        if not timestamps:
+            raise ValueError(f"{path!r} did not provide any timestamps for Y alignment.")
         return timestamps
 
     def _rows_at_timestamps(
@@ -394,29 +390,10 @@ class CryptoPriceDatasetBuilder:
         return rows
 
 
-def split_targets(price_rows: List[Dict[str, Any]], test_ratio: float) -> Dict[str, Any]:
-    if not 0.0 < test_ratio < 1.0:
-        raise ValueError("--test-ratio must be greater than 0 and less than 1")
-
-    split_index = max(1, min(len(price_rows) - 1, int(len(price_rows) * (1.0 - test_ratio))))
-    train_records = price_rows[:split_index]
-    test_records = price_rows[split_index:]
-
-    return {
-        "train_start": train_records[0]["timestamp"],
-        "train_end": train_records[-1]["timestamp"],
-        "test_start": test_records[0]["timestamp"],
-        "test_end": test_records[-1]["timestamp"],
-        "y_train": train_records,
-        "y_test": test_records,
-    }
-
-
 def build_dataset(
     crypto: str,
     days: int,
     output_path: str,
-    test_ratio: float = 0.2,
     granularity: str = "1m",
     align_with: Optional[str] = None,
     max_trades: int = DEFAULT_MAX_TRADES,
@@ -432,7 +409,6 @@ def build_dataset(
     dataset = builder.build_dataset(
         crypto=crypto,
         days=days,
-        test_ratio=test_ratio,
         granularity=granularity,
         align_with=align_with,
         price_source=price_source,
@@ -445,23 +421,17 @@ def build_dataset(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Create a Y-only crypto price dataset (y_train/y_test) using Coinbase prices. "
+            "Create a Y-only crypto price dataset using Coinbase prices. "
             "Use kalshi_crypto_pipeline.py to generate the corresponding X dataset."
         )
     )
     parser.add_argument("--crypto", default="BTC", help="Crypto asset symbol, e.g. BTC or ETH")
-    parser.add_argument("--days", type=int, default=60, help="Rolling lookback window in days")
+    parser.add_argument("--days", type=int, default=120, help="Rolling lookback window in days")
     parser.add_argument(
         "--granularity",
         choices=sorted(GRANULARITIES),
         default="1m",
         help="Candle/grid interval used for price lookup",
-    )
-    parser.add_argument(
-        "--test-ratio",
-        type=float,
-        default=0.2,
-        help="Chronological fraction of rows assigned to y_test",
     )
     parser.add_argument(
         "--align-with",
@@ -501,7 +471,6 @@ def main() -> None:
         crypto=args.crypto,
         days=args.days,
         output_path=args.output,
-        test_ratio=args.test_ratio,
         granularity=args.granularity,
         align_with=args.align_with,
         max_trades=args.max_trades,
@@ -514,8 +483,7 @@ def main() -> None:
             {
                 "crypto": dataset["crypto"],
                 "price_source": dataset["price_source"],
-                "y_train": dataset["y_train_count"],
-                "y_test": dataset["y_test_count"],
+                "rows": dataset["row_count"],
                 "window_start": dataset["window_start"],
                 "window_end": dataset["window_end"],
                 "output": args.output,

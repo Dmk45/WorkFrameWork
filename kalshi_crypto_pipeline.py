@@ -773,7 +773,7 @@ def build_dataset(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Extract Kalshi ticket history into an ML-friendly dataset")
     parser.add_argument("--crypto", default="BTC", help="The cryptocurrency or event ticker to query")
-    parser.add_argument("--days", type=int, default=60, help="The number of days of ticket history to collect")
+    parser.add_argument("--days", type=int, default=120, help="The number of days of ticket history to collect")
     parser.add_argument("--output", default="kalshi_training_dataset.json", help="Path to write the JSON payload")
     parser.add_argument("--api-key", default=os.getenv("KALSHI_API_KEY"), help="Optional Kalshi API key")
     parser.add_argument("--api-base-url", default=DEFAULT_API_BASE_URL, help="Kalshi API base URL; live mode only supports the default Kalshi endpoint")
