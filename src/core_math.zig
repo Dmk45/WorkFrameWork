@@ -371,6 +371,93 @@ pub fn addBias(allocator: std.mem.Allocator, matrix: *trix.DataObject, bias: *tr
     }
 }
 
+/// In-place add bias to each row of a 2D matrix or batch
+/// For 2D [M, N] += bias[N]: adds bias[j] to each row i
+/// For 3D [B, M, N] += bias[N]: adds bias[j] to each batch and row
+pub fn addBiasInPlace(matrix: *trix.DataObject, bias: *trix.DataObject) !void {
+    const shape = matrix.shape.?.items;
+    const bias_shape = bias.shape.?.items;
+
+    if (shape.len == 2) {
+        // 2D case: [M, N] += [N]
+        const m = shape[0];
+        const n = shape[1];
+
+        if (bias_shape.len != 1 or bias_shape[0] != n) {
+            return error.ShapeMismatch;
+        }
+
+        for (0..m) |i| {
+            for (0..n) |j| {
+                matrix.values.items[i * n + j] += bias.values.items[j];
+            }
+        }
+    } else if (shape.len == 3) {
+        // 3D case: [B, M, N] += [N]
+        const b = shape[0];
+        const m = shape[1];
+        const n = shape[2];
+
+        if (bias_shape.len != 1 or bias_shape[0] != n) {
+            return error.ShapeMismatch;
+        }
+
+        for (0..b) |batch| {
+            for (0..m) |i| {
+                for (0..n) |j| {
+                    const idx = batch * m * n + i * n + j;
+                    matrix.values.items[idx] += bias.values.items[j];
+                }
+            }
+        }
+    } else {
+        return error.UnsupportedRank;
+    }
+}
+
+/// In-place element-wise addition: a += b
+pub fn addInPlace(a: *trix.DataObject, b: *trix.DataObject) !void {
+    if (a.values.items.len != b.values.items.len) {
+        return error.ShapeMismatch;
+    }
+    for (0..a.values.items.len) |i| {
+        a.values.items[i] += b.values.items[i];
+    }
+}
+
+/// In-place element-wise subtraction: a -= b
+pub fn subInPlace(a: *trix.DataObject, b: *trix.DataObject) !void {
+    if (a.values.items.len != b.values.items.len) {
+        return error.ShapeMismatch;
+    }
+    for (0..a.values.items.len) |i| {
+        a.values.items[i] -= b.values.items[i];
+    }
+}
+
+/// In-place element-wise multiplication: a *= b
+pub fn mulInPlace(a: *trix.DataObject, b: *trix.DataObject) !void {
+    if (a.values.items.len != b.values.items.len) {
+        return error.ShapeMismatch;
+    }
+    for (0..a.values.items.len) |i| {
+        a.values.items[i] *= b.values.items[i];
+    }
+}
+
+/// In-place element-wise division: a /= b
+pub fn divInPlace(a: *trix.DataObject, b: *trix.DataObject) !void {
+    if (a.values.items.len != b.values.items.len) {
+        return error.ShapeMismatch;
+    }
+    for (0..a.values.items.len) |i| {
+        if (b.values.items[i] == 0.0) {
+            return error.DivisionByZero;
+        }
+        a.values.items[i] /= b.values.items[i];
+    }
+}
+
 /// Matrix-Vector multiplication: [M, N] @ [N] -> [M]
 pub fn matvec(allocator: std.mem.Allocator, matrix: *trix.DataObject, vec: *trix.DataObject) !trix.DataObject {
     const m_shape = matrix.shape.?.items;

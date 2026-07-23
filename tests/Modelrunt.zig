@@ -1,68 +1,104 @@
 const std = @import("std");
 const modelwork2 = @import("modelwork2");
+const crypto_dataset = @import("crypto_dataset");
 
 const trix = modelwork2.matrix;
 const layers = modelwork2.layers;
 const grad = modelwork2.grad;
 const grad_math = modelwork2.grad_math;
 
-/// Hyperparameters for a small building energy-load forecaster.
-/// Real deployment would load these from config/JSON (see `model_builder.ModelConfig`).
-pub const ForecastConfig = struct {
-    /// Hours of history per sample (e.g. 24h window).
-    seq_len: usize = 24,
-    batch_size: usize = 4,
-    /// Features per timestep: ambient temp, prior load, hour-of-day (sin).
-    num_features: usize = 3,
-    lstm_num_layers: usize = 2,
-    lstm_hidden: usize = 32,
-    head_hidden: usize = 16,
-    learning_rate: f32 = 0.01,
-    adam_beta1: f32 = 0.9,
-    adam_beta2: f32 = 0.999,
-    adam_eps: f32 = 1e-8,
-    /// Mini-batch training steps on synthetic meter data.
-    train_steps: usize = 8,
-    grad_clip_norm: f32 = 1.0,
+/// Hyperparameters for crypto price prediction model
+pub const CryptoConfig = struct {
+    batch_size: usize = 32,
+    hidden1: usize = 864,
+    hidden2: usize = 432,
+    hidden3: usize = 216,
+    hidden4: usize = 108,
+    hidden5: usize = 54,
+    hidden6: usize = 27,
+    learning_rate: f32 = 0.001,
+    epochs: usize = 100,
+    train_split: f32 = 0.8,
 };
 
-/// Sequence model: stacked LSTM encoder + MLP readout → scalar next-hour load (MW).
-pub const EnergyLoadForecaster = struct {
+/// Crypto price forecaster: MLP for predicting BTC prices from Kalshi features
+pub const CryptoForecaster = struct {
     allocator: std.mem.Allocator,
-    cfg: ForecastConfig,
+    cfg: CryptoConfig,
     nn: layers.NeuralNetwork,
 
-    pub fn init(allocator: std.mem.Allocator, cfg: ForecastConfig) !EnergyLoadForecaster {
+    pub fn init(allocator: std.mem.Allocator, cfg: CryptoConfig, num_features: usize) !CryptoForecaster {
         var nn = try layers.NeuralNetwork.init(allocator);
 
-        const lstm = try layers.LSTMLayer.init(
+        const layer1 = try layers.LinearLayer.init(
             allocator,
-            cfg.lstm_num_layers,
-            cfg.num_features,
-            cfg.lstm_hidden,
-            null,
-        );
-        try nn.add(lstm);
-
-        const readout1 = try layers.LinearLayer.init(
-            allocator,
-            cfg.lstm_hidden,
-            cfg.head_hidden,
+            num_features,
+            cfg.hidden1,
             "relu",
             null,
             null,
         );
-        try nn.add(readout1);
+        try nn.add(layer1);
 
-        const readout2 = try layers.LinearLayer.init(
+        const layer2 = try layers.LinearLayer.init(
             allocator,
-            cfg.head_hidden,
+            cfg.hidden1,
+            cfg.hidden2,
+            "relu",
+            null,
+            null,
+        );
+        try nn.add(layer2);
+
+        const layer3 = try layers.LinearLayer.init(
+            allocator,
+            cfg.hidden2,
+            cfg.hidden3,
+            "relu",
+            null,
+            null,
+        );
+        try nn.add(layer3);
+
+        const layer4 = try layers.LinearLayer.init(
+            allocator,
+            cfg.hidden3,
+            cfg.hidden4,
+            "relu",
+            null,
+            null,
+        );
+        try nn.add(layer4);
+
+        const layer5 = try layers.LinearLayer.init(
+            allocator,
+            cfg.hidden4,
+            cfg.hidden5,
+            "relu",
+            null,
+            null,
+        );
+        try nn.add(layer5);
+
+        const layer6 = try layers.LinearLayer.init(
+            allocator,
+            cfg.hidden5,
+            cfg.hidden6,
+            "relu",
+            null,
+            null,
+        );
+        try nn.add(layer6);
+
+        const output = try layers.LinearLayer.init(
+            allocator,
+            cfg.hidden6,
             1,
             "none",
             null,
             null,
         );
-        try nn.add(readout2);
+        try nn.add(output);
 
         return .{
             .allocator = allocator,
@@ -71,184 +107,253 @@ pub const EnergyLoadForecaster = struct {
         };
     }
 
-    /// Forward: sequence of [batch, features] → [batch, 1] predicted load.
-    pub fn forward(
-        self: *EnergyLoadForecaster,
-        allocator: std.mem.Allocator,
-        sequence: []const *trix.DataObject,
-    ) !trix.DataObject {
-        var output = try self.nn.forward(allocator, .{ .sequence = sequence });
+    pub fn forward(self: *CryptoForecaster, allocator: std.mem.Allocator, input: *trix.DataObject) !trix.DataObject {
+        var output = try self.nn.forward(allocator, .{ .tensor = input });
         output.enableGrad();
         try output.ensureGradValue();
         return output;
     }
 
     pub fn trainStep(
-        self: *EnergyLoadForecaster,
+        self: *CryptoForecaster,
         allocator: std.mem.Allocator,
-        sequence: []const *trix.DataObject,
+        input: *trix.DataObject,
         target: *trix.DataObject,
         optimizer: *grad.Adam,
     ) !f32 {
-        return self.nn.trainStep(allocator, .{ .sequence = sequence }, target, optimizer);
+        return self.nn.trainStep(allocator, .{ .tensor = input }, target, optimizer);
     }
 
-    pub fn deinit(self: *EnergyLoadForecaster) void {
+    pub fn deinit(self: *CryptoForecaster) void {
         self.nn.deinit();
     }
 };
 
-/// Synthetic hourly meter readings: smooth load curve + temperature coupling.
-fn syntheticLoadAt(hour: usize, day_offset: usize) f32 {
-    const t = @as(f32, @floatFromInt(hour));
-    const daily = 0.6 + 0.35 * std.math.sin(t * std.math.pi / 12.0);
-    const weekly = 0.05 * @as(f32, @floatFromInt(day_offset % 7));
-    return daily + weekly;
-}
-
-fn buildTrainingSequence(
+/// Train and evaluate crypto price prediction model
+pub fn trainAndEvaluateCryptoModel(
     allocator: std.mem.Allocator,
-    cfg: ForecastConfig,
-    day_offset: usize,
-) !struct {
-    steps: std.array_list.Managed(trix.DataObject),
-    ptrs: std.array_list.Managed(*trix.DataObject),
-    target: trix.DataObject,
-} {
-    var steps = try std.array_list.Managed(trix.DataObject).initCapacity(allocator, cfg.seq_len);
-    var ptrs = try std.array_list.Managed(*trix.DataObject).initCapacity(allocator, cfg.seq_len);
+    kalshi_path: []const u8,
+    btc_path: []const u8,
+) !void {
+    const cfg = CryptoConfig{};
+    const feature_cfg = crypto_dataset.FeatureConfig{};
 
-    for (0..cfg.seq_len) |h| {
-        const temp = 18.0 + 6.0 * std.math.sin(@as(f32, @floatFromInt(h)) * std.math.pi / 12.0);
-        const load = syntheticLoadAt(h, day_offset);
-        const hour_sin = std.math.sin(@as(f32, @floatFromInt(h)) * 2.0 * std.math.pi / 24.0);
+    std.debug.print("Loading and aligning crypto datasets...\n", .{});
+    var dataset = try crypto_dataset.parseAndAlign(allocator, kalshi_path, btc_path, feature_cfg);
+    defer dataset.deinit();
 
-        var x = try trix.DataObject.init(allocator, &[_]usize{ cfg.batch_size, cfg.num_features }, .f32);
-        for (0..cfg.batch_size) |b| {
-            const base = b * cfg.num_features;
-            x.values.items[base + 0] = temp + @as(f32, @floatFromInt(b)) * 0.01;
-            x.values.items[base + 1] = load;
-            x.values.items[base + 2] = hour_sin;
-        }
-        try steps.append(x);
-        try ptrs.append(&steps.items[steps.items.len - 1]);
+    const num_samples = dataset.x_tensor.shape.?.items[0];
+    const num_features = dataset.x_tensor.shape.?.items[1];
+
+    std.debug.print("Dataset loaded: {d} samples, {d} features\n", .{ num_samples, num_features });
+
+    // Split into train/validation
+    const train_size = @as(usize, @intFromFloat(@as(f32, @floatFromInt(num_samples)) * cfg.train_split));
+    const val_size = num_samples - train_size;
+
+    std.debug.print("Train samples: {d}, Validation samples: {d}\n", .{ train_size, val_size });
+
+    // Calculate baseline (mean prediction) for comparison
+    var train_sum: f32 = 0.0;
+    for (0..train_size) |i| {
+        train_sum += dataset.y_tensor.values.items[i];
+    }
+    const train_mean = train_sum / @as(f32, @floatFromInt(train_size));
+
+    // Calculate baseline MSE and MAE on validation set
+    var baseline_mse: f32 = 0.0;
+    var baseline_mae: f32 = 0.0;
+    var val_count: usize = 0;
+    for (train_size..num_samples) |i| {
+        const diff = train_mean - dataset.y_tensor.values.items[i];
+        baseline_mse += diff * diff;
+        baseline_mae += if (diff < 0) -diff else diff;
+        val_count += 1;
+    }
+    if (val_count > 0) {
+        baseline_mse /= @as(f32, @floatFromInt(val_count));
+        baseline_mae /= @as(f32, @floatFromInt(val_count));
     }
 
-    const next_hour = cfg.seq_len;
-    var target = try trix.DataObject.init(allocator, &[_]usize{ cfg.batch_size, 1 }, .f32);
-    for (0..cfg.batch_size) |b| {
-        target.values.items[b] = syntheticLoadAt(next_hour, day_offset) + @as(f32, @floatFromInt(b)) * 0.001;
-    }
+    std.debug.print("\n--- Baseline Performance (Mean Prediction) ---\n", .{});
+    std.debug.print("Train mean BTC price: ${d:.2}\n", .{train_mean});
+    std.debug.print("Baseline val_loss (MSE): {d:.6}\n", .{baseline_mse});
+    std.debug.print("Baseline val_mae: ${d:.2}\n", .{baseline_mae});
+    std.debug.print("----------------------------------------------\n", .{});
 
-    return .{ .steps = steps, .ptrs = ptrs, .target = target };
-}
-
-test "energy load forecaster: train with parameter updates" {
-    const allocator = std.testing.allocator;
-    const cfg: ForecastConfig = .{
-        .seq_len = 12,
-        .batch_size = 2,
-        .train_steps = 6,
-        .learning_rate = 0.05,
-    };
-
-    var model = try EnergyLoadForecaster.init(allocator, cfg);
+    // Initialize model
+    var model = try CryptoForecaster.init(allocator, cfg, num_features);
     defer model.deinit();
 
-    try std.testing.expectEqual(@as(usize, 3), model.nn.num_layers());
-
-    var optimizer = try grad.Adam.init(allocator, cfg.learning_rate, cfg.adam_beta1, cfg.adam_beta2, cfg.adam_eps);
+    var optimizer = try grad.Adam.init(allocator, cfg.learning_rate, 0.9, 0.999, 1e-8);
     defer optimizer.deinit();
 
-    const readout_layer = model.nn.get_layer(2) orelse unreachable;
-    const readout = layers.Layer.child(layers.LinearLayer, readout_layer);
-    const bias_before = readout.bias.values.items[0];
+    // Preallocate optimizer state for all layers to avoid per-step reallocation
+    try model.nn.preallocateOptimizerState(&optimizer);
 
-    var first_loss: f32 = undefined;
-    var last_loss: f32 = undefined;
+    std.debug.print("\nStarting training for {d} epochs...\n", .{cfg.epochs});
 
-    for (0..cfg.train_steps) |step| {
-        var batch = try buildTrainingSequence(allocator, cfg, step);
-        defer {
-            for (batch.steps.items) |*s| s.deinit();
-            batch.steps.deinit();
-            batch.ptrs.deinit();
-            batch.target.deinit();
+    var final_val_mae: f32 = 0.0;
+    var first_val_mae: f32 = 0.0;
+    var first_val_loss: f32 = 0.0;
+
+    for (0..cfg.epochs) |epoch| {
+        var train_loss: f32 = 0.0;
+        var train_batches: usize = 0;
+
+        // Pre-allocate batch tensors for training (reused across batches)
+        const max_batch_size = cfg.batch_size;
+        var batch_input = try trix.DataObject.init(allocator, &[_]usize{ max_batch_size, num_features }, .f32);
+        defer batch_input.deinit();
+        var batch_target = try trix.DataObject.init(allocator, &[_]usize{ max_batch_size, 1 }, .f32);
+        defer batch_target.deinit();
+
+        // Training loop
+        var batch_start: usize = 0;
+        while (batch_start < train_size) {
+            const batch_end = @min(batch_start + cfg.batch_size, train_size);
+            const current_batch_size = batch_end - batch_start;
+
+            // Fill batch from dataset using memcpy for efficiency
+            for (0..current_batch_size) |i| {
+                const sample_idx = batch_start + i;
+                const src_idx = sample_idx * num_features;
+                const dst_idx = i * num_features;
+                @memcpy(batch_input.values.items[dst_idx .. dst_idx + num_features], dataset.x_tensor.values.items[src_idx .. src_idx + num_features]);
+                batch_target.values.items[i] = dataset.y_tensor.values.items[sample_idx];
+            }
+
+            const loss = try model.trainStep(allocator, &batch_input, &batch_target, &optimizer);
+            train_loss += loss;
+            train_batches += 1;
+            batch_start = batch_end;
         }
 
-        const loss = try model.trainStep(allocator, batch.ptrs.items, &batch.target, &optimizer);
-        if (step == 0) first_loss = loss;
-        last_loss = loss;
-        try std.testing.expect(loss >= 0.0 and std.math.isFinite(loss));
+        const avg_train_loss = train_loss / @as(f32, @floatFromInt(train_batches));
+
+        // Validation
+        var val_loss: f32 = 0.0;
+        var val_batches: usize = 0;
+        var val_mae: f32 = 0.0;
+
+        // Pre-allocate validation batch tensors
+        var val_batch_input = try trix.DataObject.init(allocator, &[_]usize{ max_batch_size, num_features }, .f32);
+        defer val_batch_input.deinit();
+        var val_batch_target = try trix.DataObject.init(allocator, &[_]usize{ max_batch_size, 1 }, .f32);
+        defer val_batch_target.deinit();
+
+        batch_start = train_size;
+        while (batch_start < num_samples) {
+            const batch_end = @min(batch_start + cfg.batch_size, num_samples);
+            const current_batch_size = batch_end - batch_start;
+
+            // Fill validation batch using memcpy
+            for (0..current_batch_size) |i| {
+                const sample_idx = batch_start + i;
+                const src_idx = sample_idx * num_features;
+                const dst_idx = i * num_features;
+                @memcpy(val_batch_input.values.items[dst_idx .. dst_idx + num_features], dataset.x_tensor.values.items[src_idx .. src_idx + num_features]);
+                val_batch_target.values.items[i] = dataset.y_tensor.values.items[sample_idx];
+            }
+
+            var output = try model.forward(allocator, &val_batch_input);
+            defer output.deinit();
+
+            // Compute MSE loss
+            var mse: f32 = 0.0;
+            var mae: f32 = 0.0;
+            for (0..current_batch_size) |i| {
+                const diff = output.values.items[i] - val_batch_target.values.items[i];
+                mse += diff * diff;
+                mae += if (diff < 0) -diff else diff;
+            }
+            mse /= @as(f32, @floatFromInt(current_batch_size));
+            mae /= @as(f32, @floatFromInt(current_batch_size));
+
+            val_loss += mse;
+            val_mae += mae;
+            val_batches += 1;
+            batch_start = batch_end;
+        }
+
+        const avg_val_loss = val_loss / @as(f32, @floatFromInt(val_batches));
+        const avg_val_mae = val_mae / @as(f32, @floatFromInt(val_batches));
+
+        // Store first epoch metrics
+        if (epoch == 0) {
+            first_val_mae = avg_val_mae;
+            first_val_loss = avg_val_loss;
+        }
+
+        final_val_mae = avg_val_mae;
+
+        std.debug.print("Epoch {d}/{d} - train_loss: {d:.6}, val_loss: {d:.6}, val_mae: ${d:.2}\n", .{
+            epoch + 1,
+            cfg.epochs,
+            avg_train_loss,
+            avg_val_loss,
+            avg_val_mae,
+        });
+
+        // Show sample predictions on last epoch
+        if (epoch == cfg.epochs - 1) {
+            std.debug.print("\n--- Sample Predictions (Validation Set) ---\n", .{});
+            const sample_count = @min(@as(usize, 5), val_size);
+            var sample_idx: usize = train_size;
+            while (sample_idx < train_size + sample_count) : (sample_idx += 1) {
+                var sample_input = try trix.DataObject.init(allocator, &[_]usize{ 1, num_features }, .f32);
+                defer sample_input.deinit();
+
+                for (0..num_features) |f| {
+                    const src_idx = sample_idx * num_features + f;
+                    sample_input.values.items[f] = dataset.x_tensor.values.items[src_idx];
+                }
+
+                var sample_target = try trix.DataObject.init(allocator, &[_]usize{ 1, 1 }, .f32);
+                defer sample_target.deinit();
+                sample_target.values.items[0] = dataset.y_tensor.values.items[sample_idx];
+
+                var sample_output = try model.forward(allocator, &sample_input);
+                defer sample_output.deinit();
+
+                const prediction = sample_output.values.items[0];
+                const actual = sample_target.values.items[0];
+                const diff = prediction - actual;
+
+                std.debug.print("Sample {d}: Predicted: ${d:.2}, Actual: ${d:.2}, Error: ${d:.2}\n", .{
+                    sample_idx - train_size + 1,
+                    prediction,
+                    actual,
+                    diff,
+                });
+            }
+            std.debug.print("-------------------------------------------\n", .{});
+        }
     }
 
-    const bias_after = readout.bias.values.items[0];
-    try std.testing.expect(bias_before != bias_after);
-    try std.testing.expect(last_loss <= first_loss * 1.5);
+    std.debug.print("\n--- Final Performance Comparison ---\n", .{});
+    std.debug.print("Baseline val_mae: ${d:.2}\n", .{baseline_mae});
+    std.debug.print("First epoch val_mae: ${d:.2}\n", .{first_val_mae});
+    std.debug.print("Final model val_mae: ${d:.2}\n", .{final_val_mae});
+
+    const baseline_improvement = baseline_mae - final_val_mae;
+    const baseline_improvement_pct = (baseline_improvement / baseline_mae) * 100.0;
+    std.debug.print("Improvement over baseline: ${d:.2} ({d:.1}%)\n", .{ baseline_improvement, baseline_improvement_pct });
+
+    const training_improvement = first_val_mae - final_val_mae;
+    const training_improvement_pct = (training_improvement / first_val_mae) * 100.0;
+    std.debug.print("Improvement from first epoch: ${d:.2} ({d:.1}%)\n", .{ training_improvement, training_improvement_pct });
+    std.debug.print("--------------------------------------\n", .{});
+    std.debug.print("Training complete!\n", .{});
 }
 
-test "energy load forecaster: forward output shape" {
-    const allocator = std.testing.allocator;
-    const cfg: ForecastConfig = .{ .seq_len = 5, .batch_size = 1 };
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
 
-    var model = try EnergyLoadForecaster.init(allocator, cfg);
-    defer model.deinit();
+    const kalshi_path = "kalshi_training_120d_dataset.json";
+    const btc_path = "btc_price_120d_dataset.json";
 
-    var batch = try buildTrainingSequence(allocator, cfg, 0);
-    defer {
-        for (batch.steps.items) |*s| s.deinit();
-        batch.steps.deinit();
-        batch.ptrs.deinit();
-        batch.target.deinit();
-    }
-
-    var output = try model.forward(allocator, batch.ptrs.items);
-    defer output.deinit();
-
-    try std.testing.expectEqualSlices(usize, &[_]usize{ cfg.batch_size, 1 }, output.shape.?.items);
-}
-
-fn customTrainStep(
-    network_ptr: *anyopaque,
-    allocator: std.mem.Allocator,
-    input: layers.ForwardInput,
-    target: *trix.DataObject,
-    optimizer: *grad.Adam,
-) anyerror!f32 {
-    _ = network_ptr;
-    _ = allocator;
-    _ = input;
-    _ = target;
-    _ = optimizer;
-    return 1.5;
-}
-
-test "neural network hooks can be overridden and cloneTensor is reusable" {
-    const allocator = std.testing.allocator;
-
-    var nn = try layers.NeuralNetwork.init(allocator);
-    defer nn.deinit();
-
-    const layer = try layers.LinearLayer.init(allocator, 1, 1, "none", null, null);
-    try nn.add(layer);
-
-    var input = try trix.DataObject.init(allocator, &[_]usize{ 1, 1 }, .f32);
-    defer input.deinit();
-    input.values.items[0] = 2.0;
-
-    var clone = try trix.cloneTensor(allocator, &input);
-    defer clone.deinit();
-    try std.testing.expectEqual(@as(f32, 2.0), clone.values.items[0]);
-
-    nn.setTrainStepFn(customTrainStep);
-
-    var target = try trix.DataObject.init(allocator, &[_]usize{ 1, 1 }, .f32);
-    defer target.deinit();
-    target.values.items[0] = 1.0;
-
-    var optimizer = try grad.Adam.init(allocator, 0.01, 0.9, 0.999, 1e-8);
-    defer optimizer.deinit();
-
-    const loss = try nn.trainStep(allocator, .{ .tensor = &input }, &target, &optimizer);
-    try std.testing.expectEqual(@as(f32, 1.5), loss);
+    try trainAndEvaluateCryptoModel(allocator, kalshi_path, btc_path);
 }

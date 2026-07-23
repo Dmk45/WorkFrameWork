@@ -117,6 +117,23 @@ pub const Adam = struct {
         };
     }
 
+    /// Pre-allocate optimizer state buffers for a given parameter size
+    /// Call this once during model initialization to avoid per-step reallocation
+    pub fn preallocate(self: *Adam, param_size: usize) !void {
+        if (self.m == null or self.m.?.items.len != param_size) {
+            if (self.m) |*m| m.deinit();
+            self.m = try std.array_list.Managed(f32).initCapacity(self.allocator, param_size);
+            try self.m.?.resize(param_size);
+            @memset(self.m.?.items, 0.0);
+        }
+        if (self.v == null or self.v.?.items.len != param_size) {
+            if (self.v) |*v| v.deinit();
+            self.v = try std.array_list.Managed(f32).initCapacity(self.allocator, param_size);
+            try self.v.?.resize(param_size);
+            @memset(self.v.?.items, 0.0);
+        }
+    }
+
     pub fn deinit(self: *Adam) void {
         if (self.m) |*m| m.deinit();
         if (self.v) |*v| v.deinit();
@@ -127,13 +144,15 @@ pub const Adam = struct {
 
         self.t += 1;
 
-        // Initialize m and v if not done
-        if (self.m == null) {
+        // Initialize or resize m and v if needed
+        if (self.m == null or self.m.?.items.len != param.values.items.len) {
+            if (self.m) |*m| m.deinit();
             self.m = try std.array_list.Managed(f32).initCapacity(self.allocator, param.values.items.len);
             try self.m.?.resize(param.values.items.len);
             @memset(self.m.?.items, 0.0);
         }
-        if (self.v == null) {
+        if (self.v == null or self.v.?.items.len != param.values.items.len) {
+            if (self.v) |*v| v.deinit();
             self.v = try std.array_list.Managed(f32).initCapacity(self.allocator, param.values.items.len);
             try self.v.?.resize(param.values.items.len);
             @memset(self.v.?.items, 0.0);

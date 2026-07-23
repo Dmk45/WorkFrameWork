@@ -33,34 +33,20 @@ fn defaultLinearForward(layer_ptr: *anyopaque, allocator: std.mem.Allocator, inp
     const self: *LinearLayer = @ptrCast(@alignCast(layer_ptr));
 
     // Compute: output = input @ weights + bias
-    var hidden = try core.matmul(allocator, input, &self.weights);
-    hidden.enableGrad();
-    try hidden.ensureGradValue();
-
-    var output = try core.addBias(allocator, &hidden, &self.bias);
+    var output = try core.matmul(allocator, input, &self.weights);
     output.enableGrad();
     try output.ensureGradValue();
 
-    // Apply activation
+    // Add bias in-place to avoid allocation
+    try core.addBiasInPlace(&output, &self.bias);
+
+    // Apply activation in-place to avoid unnecessary allocations
     if (std.mem.eql(u8, self.config.activation, "relu")) {
-        var activated = try trix.DataObject.init(allocator, output.shape.?.items, .f32);
-        @memcpy(activated.values.items, output.values.items);
-        matlab_mod.relu(activated.values.items.ptr, activated.values.items.len);
-        activated.enableGrad();
-        try activated.ensureGradValue();
-        output.deinit();
-        output = activated;
+        matlab_mod.relu(output.values.items.ptr, output.values.items.len);
     } else if (std.mem.eql(u8, self.config.activation, "sigmoid")) {
-        var activated = try trix.DataObject.init(allocator, output.shape.?.items, .f32);
-        @memcpy(activated.values.items, output.values.items);
-        matlab_mod.sigmoid(activated.values.items.ptr, activated.values.items.len);
-        activated.enableGrad();
-        try activated.ensureGradValue();
-        output.deinit();
-        output = activated;
+        matlab_mod.sigmoid(output.values.items.ptr, output.values.items.len);
     }
 
-    hidden.deinit();
     return output;
 }
 
@@ -279,6 +265,12 @@ pub const LinearLayer = struct {
 
     pub fn get_bias(self: *LinearLayer) *trix.DataObject {
         return &self.bias;
+    }
+
+    /// Preallocate optimizer state for this layer's parameters
+    pub fn preallocateOptimizerState(self: *LinearLayer, optimizer: *grad_mod.Adam) !void {
+        try optimizer.preallocate(self.weights.values.items.len);
+        try optimizer.preallocate(self.bias.values.items.len);
     }
 };
 
@@ -1344,6 +1336,8 @@ fn defaultNeuralNetworkForward(network_ptr: *anyopaque, allocator: std.mem.Alloc
 
     switch (input) {
         .tensor => |t| {
+            // Cache the original input for backprop
+            try cacheActivation(allocator, &network.activations, t);
             output = try trix.DataObject.init(allocator, t.shape.?.items, .f32);
             @memcpy(output.values.items, t.values.items);
             owns_output = true;
@@ -1405,11 +1399,9 @@ fn accumulateBiasGrad(d_output: *const trix.DataObject, bias: *trix.DataObject) 
 
 fn defaultNeuralNetworkAccumulateGradients(network_ptr: *anyopaque, allocator: std.mem.Allocator, d_output: *trix.DataObject) !void {
     const network: *NeuralNetwork = @ptrCast(@alignCast(network_ptr));
-    if (network.activations.items.len < 3) return;
+    if (network.activations.items.len < 2) return;
 
-    const lstm_cache = &network.activations.items[0];
-    const h1_cache = &network.activations.items[1];
-
+    // Initialize gradient with output gradient
     var d_loss = try trix.DataObject.init(allocator, d_output.shape.?.items, .f32);
     defer d_loss.deinit();
     try d_output.ensureGradValue();
@@ -1418,32 +1410,55 @@ fn defaultNeuralNetworkAccumulateGradients(network_ptr: *anyopaque, allocator: s
     try d_loss.ensureGradValue();
     @memcpy(d_loss.grad_value.?.items, d_output.grad_value.?.items);
 
-    const readout2_layer = network.get_layer(2) orelse return;
-    const linear2 = Layer.child(LinearLayer, readout2_layer);
-    try grad_math.matmulBackward(h1_cache, &linear2.weights, &d_loss, allocator);
-    try accumulateBiasGrad(&d_loss, &linear2.bias);
+    // Backpropagate through layers in reverse order
+    var layer_idx: isize = @as(isize, @intCast(network.layers.items.len)) - 1;
+    while (layer_idx >= 0) : (layer_idx -= 1) {
+        const layer = network.layers.items[@as(usize, @intCast(layer_idx))];
 
-    var w2_t = try core.transpose(allocator, &linear2.weights);
-    defer w2_t.deinit();
-    var d_h1 = try core.matmul(allocator, &d_loss, &w2_t);
-    defer d_h1.deinit();
+        // During forward pass (after my fix):
+        // activations[0] = original input
+        // activations[1] = output of layer 0
+        // activations[2] = output of layer 1
+        // activations[3] = output of layer 2
+        // So for layer i, input is activations[i]
+        const input_activation_idx = @as(usize, @intCast(layer_idx));
+        if (input_activation_idx >= network.activations.items.len) continue;
 
-    const readout1_layer = network.get_layer(1) orelse return;
-    const linear1 = Layer.child(LinearLayer, readout1_layer);
-    var d_lstm = try trix.DataObject.init(allocator, d_h1.shape.?.items, .f32);
-    defer d_lstm.deinit();
-    @memcpy(d_lstm.values.items, d_h1.values.items);
+        const input_activation = &network.activations.items[input_activation_idx];
 
-    if (std.mem.eql(u8, linear1.config.activation, "relu")) {
-        h1_cache.enableGrad();
-        try h1_cache.ensureGradValue();
-        @memset(h1_cache.grad_value.?.items, 0.0);
-        try grad_math.reluBackward(h1_cache, &d_h1);
-        @memcpy(d_lstm.values.items, h1_cache.grad_value.?.items);
+        // Try to cast to LinearLayer
+        const linear_ptr: ?*LinearLayer = @ptrCast(@alignCast(layer.type));
+        if (linear_ptr != null) {
+            const linear = linear_ptr.?;
+            try grad_math.matmulBackward(input_activation, &linear.weights, &d_loss, allocator);
+            try accumulateBiasGrad(&d_loss, &linear.bias);
+
+            // Compute gradient for next layer
+            var w_t = try core.transpose(allocator, &linear.weights);
+            defer w_t.deinit();
+            var d_next = try core.matmul(allocator, &d_loss, &w_t);
+            defer d_next.deinit();
+
+            // Update d_loss for next iteration
+            d_loss.deinit();
+            d_loss = try trix.DataObject.init(allocator, d_next.shape.?.items, .f32);
+            @memcpy(d_loss.values.items, d_next.values.items);
+            d_loss.enableGrad();
+            try d_loss.ensureGradValue();
+            @memcpy(d_loss.grad_value.?.items, d_next.values.items);
+
+            // Apply activation backward if needed
+            if (std.mem.eql(u8, linear.config.activation, "relu")) {
+                input_activation.enableGrad();
+                try input_activation.ensureGradValue();
+                @memset(input_activation.grad_value.?.items, 0.0);
+                try grad_math.reluBackward(input_activation, &d_loss);
+                @memcpy(d_loss.values.items, input_activation.grad_value.?.items);
+            }
+        }
+        // LSTM layers are not handled in this generic implementation
+        // They require special handling due to their cell-based structure
     }
-
-    try grad_math.matmulBackward(lstm_cache, &linear1.weights, &d_lstm, allocator);
-    try accumulateBiasGrad(&d_lstm, &linear1.bias);
 }
 
 fn defaultNeuralNetworkTrainStep(network_ptr: *anyopaque, allocator: std.mem.Allocator, input: ForwardInput, target: *trix.DataObject, optimizer: *grad_mod.Adam) !f32 {
@@ -1570,6 +1585,18 @@ pub const NeuralNetwork = struct {
         }
         self.layers.deinit();
         self.activations.deinit();
+    }
+
+    /// Preallocate optimizer state for all layers in the network
+    /// Call this once after model initialization to avoid per-step reallocation
+    pub fn preallocateOptimizerState(self: *NeuralNetwork, optimizer: *grad_mod.Adam) !void {
+        for (self.layers.items) |layer| {
+            const layer_ptr = layer.type;
+            // Try to cast to LinearLayer for optimizer state preallocation
+            // This handles the common case; other layer types can be added as needed
+            const linear_layer = @as(*LinearLayer, @ptrCast(@alignCast(layer_ptr)));
+            try linear_layer.preallocateOptimizerState(optimizer);
+        }
     }
 
     pub fn get_layer(self: *NeuralNetwork, idx: usize) ?*Layer {

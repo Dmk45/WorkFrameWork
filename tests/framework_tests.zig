@@ -468,3 +468,92 @@ test "section 10 tensor utility operations" {
     }
     try std.testing.expectEqual(@as(usize, 2), parts.items.len);
 }
+
+test "crypto dataset parser end-to-end alignment test with mock JSONs" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const mock_kalshi_json =
+        \\{
+        \\  "crypto": "BTC",
+        \\  "requested_days": 120,
+        \\  "window_start": "2026-03-19T20:00:00Z",
+        \\  "window_end": "2026-07-17T20:00:00Z",
+        \\  "training_rows": [
+        \\    {
+        \\      "ticket_id": "T1",
+        \\      "event_ticker": "BTC",
+        \\      "timestamp": "2026-07-17T20:00:46Z",
+        \\      "probability": 0.55,
+        \\      "probability_change": 0.01,
+        \\      "quantity": 10.0,
+        \\      "position": 1,
+        \\      "action": 0,
+        \\      "time_since_open_hours": 1.5,
+        \\      "ticket_time_span_days": 2.0,
+        \\      "target": 1
+        \\    }
+        \\  ]
+        \\}
+    ;
+
+    const mock_btc_json =
+        \\{
+        \\  "crypto": "BTC",
+        \\  "quote_currency": "USD",
+        \\  "product_id": "BTC-USD",
+        \\  "requested_days": 120,
+        \\  "window_start": "2026-03-18T19:00:00Z",
+        \\  "window_end": "2026-07-17T20:00:00Z",
+        \\  "price_source": "candles",
+        \\  "source": "Coinbase",
+        \\  "target_definition": "candle close price",
+        \\  "row_count": 2,
+        \\  "y_rows": [
+        \\    {
+        \\      "timestamp": "2026-07-17T20:00:00Z",
+        \\      "price": 63999.99
+        \\    },
+        \\    {
+        \\      "timestamp": "2026-07-17T20:01:00Z",
+        \\      "price": 64005.50
+        \\    }
+        \\  ]
+        \\}
+    ;
+
+    if (@hasDecl(std.testing, "io")) {
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "kalshi.json", .data = mock_kalshi_json });
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "btc.json", .data = mock_btc_json });
+    } else {
+        try tmp.dir.writeFile(.{ .sub_path = "kalshi.json", .data = mock_kalshi_json });
+        try tmp.dir.writeFile(.{ .sub_path = "btc.json", .data = mock_btc_json });
+    }
+
+    const kalshi_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/kalshi.json", .{tmp.sub_path});
+    defer allocator.free(kalshi_path);
+
+    const btc_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/btc.json", .{tmp.sub_path});
+    defer allocator.free(btc_path);
+
+    const parser = @import("crypto_dataset");
+    const cfg = parser.FeatureConfig{};
+
+    var dataset = try parser.parseAndAlign(allocator, kalshi_path, btc_path, cfg);
+    defer dataset.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), dataset.x_tensor.shape.?.items[0]);
+    try std.testing.expectEqual(@as(usize, 8), dataset.x_tensor.shape.?.items[1]);
+    try std.testing.expectEqual(@as(usize, 1), dataset.y_tensor.shape.?.items[0]);
+    try std.testing.expectEqual(@as(usize, 1), dataset.y_tensor.shape.?.items[1]);
+
+    // aligned btc price should be 63999.99 because target time is 20:00:46,
+    // which is before 20:01:00 candle close and after/at 20:00:00 candle close
+    try std.testing.expectApproxEqAbs(@as(f32, 63999.99), dataset.y_tensor.values.items[0], 1e-2);
+
+    // check probability feature
+    try std.testing.expectApproxEqAbs(@as(f32, 0.55), dataset.x_tensor.get(&[_]usize{ 0, 0 }), 1e-4);
+}
+
