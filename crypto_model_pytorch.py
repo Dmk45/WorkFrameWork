@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from datetime import datetime
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 import bisect
 
 
@@ -20,42 +20,35 @@ class BtcPriceRecord:
 
 
 class KalshiTrainingRow:
-    def __init__(self, timestamp: str, features: dict):
+    def __init__(self, ticker: str, timestamp: str, probability: float, lookahead_seconds: int, target_btc_price: float = None):
+        self.ticker = ticker
         self.timestamp = timestamp
-        self.features = features
+        self.probability = probability
+        self.lookahead_seconds = lookahead_seconds
+        self.target_btc_price = target_btc_price
 
 
 class FeatureConfig:
     def __init__(self):
         # Feature flags matching Zig implementation
         self.probability = True
-        self.probability_change = True
-        self.quantity = True
-        self.position = True
-        self.action = True
-        self.time_since_open_hours = True
-        self.ticket_time_span_days = True
-        self.target = True
+        self.lookahead_seconds = True
     
     def count_features(self):
         count = 0
         if self.probability: count += 1
-        if self.probability_change: count += 1
-        if self.quantity: count += 1
-        if self.position: count += 1
-        if self.action: count += 1
-        if self.time_since_open_hours: count += 1
-        if self.ticket_time_span_days: count += 1
-        if self.target: count += 1
+        if self.lookahead_seconds: count += 1
         return count
 
 
-def find_most_recent_price_index(timestamp: int, btc_prices: List[BtcPriceRecord]) -> int:
+def find_most_recent_price_index(timestamp: int, btc_prices: List[BtcPriceRecord]) -> Optional[int]:
     """Find the most recent BTC price whose timestamp is <= the given timestamp."""
     # Extract timestamps for binary search
     timestamps = [p.timestamp for p in btc_prices]
     idx = bisect.bisect_right(timestamps, timestamp) - 1
-    return max(0, idx)
+    if idx < 0:
+        return None
+    return idx
 
 
 def parse_and_align(kalshi_path: str, btc_path: str, feature_cfg: FeatureConfig) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -69,8 +62,11 @@ def parse_and_align(kalshi_path: str, btc_path: str, feature_cfg: FeatureConfig)
     kalshi_rows = []
     for row in kalshi_data['training_rows']:
         kalshi_rows.append(KalshiTrainingRow(
+            ticker=row['ticker'],
             timestamp=row['timestamp'],
-            features=row
+            probability=row['probability'],
+            lookahead_seconds=row['lookahead_seconds'],
+            target_btc_price=row.get('target_btc_price')
         ))
     
     # Load BTC dataset
@@ -94,27 +90,19 @@ def parse_and_align(kalshi_path: str, btc_path: str, feature_cfg: FeatureConfig)
     
     for row in kalshi_rows:
         kalshi_ts = parse_iso8601_to_seconds(row.timestamp)
-        btc_idx = find_most_recent_price_index(kalshi_ts, btc_prices)
+        # Add lookahead seconds to get the target timestamp
+        target_ts = kalshi_ts + row.lookahead_seconds
+        btc_idx = find_most_recent_price_index(target_ts, btc_prices)
+        if btc_idx is None:
+            continue  # Skip if no matching BTC price
         btc_price = btc_prices[btc_idx].close
         
         # Extract features matching Zig implementation
         features = []
         if feature_cfg.probability:
-            features.append(float(row.features.get('probability', 0.0)))
-        if feature_cfg.probability_change:
-            features.append(float(row.features.get('probability_change', 0.0)))
-        if feature_cfg.quantity:
-            features.append(float(row.features.get('quantity', 0.0)))
-        if feature_cfg.position:
-            features.append(float(row.features.get('position', 0)))
-        if feature_cfg.action:
-            features.append(float(row.features.get('action', 0)))
-        if feature_cfg.time_since_open_hours:
-            features.append(float(row.features.get('time_since_open_hours', 0.0)))
-        if feature_cfg.ticket_time_span_days:
-            features.append(float(row.features.get('ticket_time_span_days', 0.0)))
-        if feature_cfg.target:
-            features.append(float(row.features.get('target', 0)))
+            features.append(float(row.probability))
+        if feature_cfg.lookahead_seconds:
+            features.append(float(row.lookahead_seconds))
         
         aligned_x.append(features)
         aligned_y.append(btc_price)
@@ -154,12 +142,12 @@ def train_and_evaluate_crypto_model(kalshi_path: str, btc_path: str):
     
     # Hyperparameters (matching Zig implementation)
     batch_size = 32
-    hidden1 = 864
-    hidden2 = 432
-    hidden3 = 216
-    hidden4 = 108
-    hidden5 = 54
-    hidden6 = 27
+    hidden1 = 64  # Reduced since we have fewer features now
+    hidden2 = 32
+    hidden3 = 16
+    hidden4 = 8
+    hidden5 = 4
+    hidden6 = 2
     learning_rate = 0.001
     epochs = 100
     train_split = 0.8

@@ -24,17 +24,11 @@ pub const BtcPriceDataset = struct {
 };
 
 pub const KalshiTrainingRow = struct {
-    ticket_id: []const u8,
-    event_ticker: []const u8,
+    ticker: []const u8,
     timestamp: []const u8,
     probability: f32,
-    probability_change: f32,
-    quantity: f32,
-    position: i32,
-    action: i32,
-    time_since_open_hours: f32,
-    ticket_time_span_days: f32,
-    target: i32,
+    lookahead_seconds: i32,
+    target_btc_price: ?f32,
 };
 
 pub const KalshiDataset = struct {
@@ -42,29 +36,33 @@ pub const KalshiDataset = struct {
     requested_days: u32,
     window_start: []const u8,
     window_end: []const u8,
+    ticker_chunks: []TickerChunk,
     training_rows: []KalshiTrainingRow,
+};
+
+pub const TickerChunk = struct {
+    ticker: []const u8,
+    lookahead_seconds: i32,
+    window_start: ?[]const u8,
+    window_end: ?[]const u8,
+    probability_records: []ProbabilityRecord,
+};
+
+pub const ProbabilityRecord = struct {
+    ticker: []const u8,
+    timestamp: []const u8,
+    probability: f32,
+    lookahead_seconds: i32,
 };
 
 pub const FeatureConfig = struct {
     probability: bool = true,
-    probability_change: bool = true,
-    quantity: bool = true,
-    position: bool = true,
-    action: bool = true,
-    time_since_open_hours: bool = true,
-    ticket_time_span_days: bool = true,
-    target: bool = true,
+    lookahead_seconds: bool = true,
 
     pub fn countFeatures(self: FeatureConfig) usize {
         var count: usize = 0;
         if (self.probability) count += 1;
-        if (self.probability_change) count += 1;
-        if (self.quantity) count += 1;
-        if (self.position) count += 1;
-        if (self.action) count += 1;
-        if (self.time_since_open_hours) count += 1;
-        if (self.ticket_time_span_days) count += 1;
-        if (self.target) count += 1;
+        if (self.lookahead_seconds) count += 1;
         return count;
     }
 };
@@ -245,7 +243,9 @@ pub fn parseAndAlign(
 
     for (kalshi_data.training_rows, 0..) |row, i| {
         const t = try parseIso8601ToSeconds(row.timestamp);
-        if (findMostRecentPriceIndex(btc_times, t)) |btc_idx| {
+        // Add lookahead seconds to get the target timestamp
+        const target_time = t + @as(f64, @floatFromInt(row.lookahead_seconds));
+        if (findMostRecentPriceIndex(btc_times, target_time)) |btc_idx| {
             try aligned_indices.append(.{ .kalshi_idx = i, .btc_idx = btc_idx });
         }
     }
@@ -276,32 +276,8 @@ pub fn parseAndAlign(
             x_tensor.values.items[base + f_idx] = k_row.probability;
             f_idx += 1;
         }
-        if (cfg.probability_change) {
-            x_tensor.values.items[base + f_idx] = k_row.probability_change;
-            f_idx += 1;
-        }
-        if (cfg.quantity) {
-            x_tensor.values.items[base + f_idx] = k_row.quantity;
-            f_idx += 1;
-        }
-        if (cfg.position) {
-            x_tensor.values.items[base + f_idx] = @as(f32, @floatFromInt(k_row.position));
-            f_idx += 1;
-        }
-        if (cfg.action) {
-            x_tensor.values.items[base + f_idx] = @as(f32, @floatFromInt(k_row.action));
-            f_idx += 1;
-        }
-        if (cfg.time_since_open_hours) {
-            x_tensor.values.items[base + f_idx] = k_row.time_since_open_hours;
-            f_idx += 1;
-        }
-        if (cfg.ticket_time_span_days) {
-            x_tensor.values.items[base + f_idx] = k_row.ticket_time_span_days;
-            f_idx += 1;
-        }
-        if (cfg.target) {
-            x_tensor.values.items[base + f_idx] = @as(f32, @floatFromInt(k_row.target));
+        if (cfg.lookahead_seconds) {
+            x_tensor.values.items[base + f_idx] = @as(f32, @floatFromInt(k_row.lookahead_seconds));
             f_idx += 1;
         }
 
@@ -343,20 +319,8 @@ pub fn main() !void {
             };
         } else if (std.mem.eql(u8, arg, "--no-prob")) {
             cfg.probability = false;
-        } else if (std.mem.eql(u8, arg, "--no-prob-change")) {
-            cfg.probability_change = false;
-        } else if (std.mem.eql(u8, arg, "--no-qty")) {
-            cfg.quantity = false;
-        } else if (std.mem.eql(u8, arg, "--no-pos")) {
-            cfg.position = false;
-        } else if (std.mem.eql(u8, arg, "--no-act")) {
-            cfg.action = false;
-        } else if (std.mem.eql(u8, arg, "--no-time-open")) {
-            cfg.time_since_open_hours = false;
-        } else if (std.mem.eql(u8, arg, "--no-time-span")) {
-            cfg.ticket_time_span_days = false;
-        } else if (std.mem.eql(u8, arg, "--no-target")) {
-            cfg.target = false;
+        } else if (std.mem.eql(u8, arg, "--no-lookahead")) {
+            cfg.lookahead_seconds = false;
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             std.debug.print(
                 \\Crypto Dataset Parser CLI
@@ -366,13 +330,7 @@ pub fn main() !void {
                 \\  --kalshi <path>      Path to Kalshi JSON dataset (default: kalshi_training_120d_dataset.json)
                 \\  --btc <path>         Path to BTC price JSON dataset (default: btc_price_120d_dataset.json)
                 \\  --no-prob            Exclude 'probability' feature
-                \\  --no-prob-change     Exclude 'probability_change' feature
-                \\  --no-qty             Exclude 'quantity' feature
-                \\  --no-pos             Exclude 'position' feature
-                \\  --no-act             Exclude 'action' feature
-                \\  --no-time-open       Exclude 'time_since_open_hours' feature
-                \\  --no-time-span       Exclude 'ticket_time_span_days' feature
-                \\  --no-target          Exclude Kalshi 'target' feature
+                \\  --no-lookahead       Exclude 'lookahead_seconds' feature
                 \\  -h, --help           Show this help text
                 \\
             , .{});
@@ -439,12 +397,11 @@ test "findMostRecentPriceIndex performs correct alignment binary search" {
 
 test "FeatureConfig toggles features correctly" {
     var cfg = FeatureConfig{};
-    try std.testing.expectEqual(@as(usize, 8), cfg.countFeatures());
+    try std.testing.expectEqual(@as(usize, 2), cfg.countFeatures());
 
     cfg.probability = false;
-    try std.testing.expectEqual(@as(usize, 7), cfg.countFeatures());
+    try std.testing.expectEqual(@as(usize, 1), cfg.countFeatures());
 
-    cfg.probability_change = false;
-    cfg.quantity = false;
-    try std.testing.expectEqual(@as(usize, 5), cfg.countFeatures());
+    cfg.lookahead_seconds = false;
+    try std.testing.expectEqual(@as(usize, 0), cfg.countFeatures());
 }

@@ -81,8 +81,19 @@ pub const ZeroGradFn = *const fn (layer: *anyopaque) void;
 pub const UpdateFn = *const fn (layer: *anyopaque, optimizer: *grad_mod.Adam) anyerror!void;
 pub const ClipGradFn = *const fn (layer: *anyopaque, norm: f32) void;
 
+/// Layer type enumeration for serialization/deserialization
+pub const LayerType = enum {
+    linear,
+    conv1d,
+    conv2d,
+    conv3d,
+    lstm,
+    gru,
+};
+
 /// Parent layer handle. `type` points at the concrete child (which embeds this as `.layer`).
 pub const Layer = struct {
+    layer_type: LayerType,
     type: *anyopaque,
     forward_fn: ForwardFn,
     backprop_fn: BackpropFn,
@@ -136,6 +147,7 @@ pub const Layer = struct {
 
 pub fn wireLayer(
     layer: *Layer,
+    layer_type: LayerType,
     child: *anyopaque,
     forward_fn: ForwardFn,
     backprop_fn: BackpropFn,
@@ -145,6 +157,7 @@ pub fn wireLayer(
     clip_grad_fn: ?ClipGradFn,
     forward_sequence_fn: ?LSTMForwardSequenceFn,
 ) void {
+    layer.layer_type = layer_type;
     layer.type = child;
     layer.forward_fn = forward_fn;
     layer.backprop_fn = backprop_fn;
@@ -231,6 +244,7 @@ pub const LinearLayer = struct {
         };
         wireLayer(
             &self.layer,
+            .linear,
             self,
             forward_fn orelse defaultLinearForward,
             backprop_fn orelse defaultLinearBackprop,
@@ -361,6 +375,7 @@ pub const Conv1DLayer = struct {
         };
         wireLayer(
             &self.layer,
+            .conv1d,
             self,
             forward_fn orelse defaultConv1DForward,
             backprop_fn orelse defaultConv1DBackprop,
@@ -489,6 +504,7 @@ pub const Conv2DLayer = struct {
         };
         wireLayer(
             &self.layer,
+            .conv2d,
             self,
             forward_fn orelse defaultConv2DForward,
             backprop_fn orelse defaultConv2DBackprop,
@@ -630,6 +646,7 @@ pub const Conv3DLayer = struct {
         };
         wireLayer(
             &self.layer,
+            .conv3d,
             self,
             forward_fn orelse defaultConv3DForward,
             backprop_fn orelse defaultConv3DBackprop,
@@ -914,6 +931,7 @@ pub const LSTMCell = struct {
         };
         wireLayer(
             &self.layer,
+            .lstm,
             self,
             defaultLSTMCellForwardWrapped,
             backprop_fn orelse defaultLSTMCellBackprop,
@@ -1038,6 +1056,7 @@ pub const GRUCell = struct {
         };
         wireLayer(
             &self.layer,
+            .gru,
             self,
             defaultGRUCellForwardWrapped,
             backprop_fn orelse defaultGRUCellBackprop,
@@ -1207,6 +1226,7 @@ pub const LSTMLayer = struct {
         };
         wireLayer(
             &self.layer,
+            .lstm,
             self,
             defaultLSTMForwardInvalid,
             defaultLSTMLayerBackprop,

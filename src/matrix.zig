@@ -35,6 +35,7 @@ pub const DataObject = struct {
     grad_value: ?std.array_list.Managed(f32) = null,
     attributes: ?std.StringHashMap(f32) = null,
     grad: bool = false,
+    param_path: ?[]const u8 = null, // Path for parameter persistence (e.g., "layers.0.weights")
 
     pub fn init(allocator: std.mem.Allocator, dims: []const usize, dtype: DType) !DataObject {
         // 1. Calculate total size and strides

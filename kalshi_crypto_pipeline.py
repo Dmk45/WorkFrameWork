@@ -14,6 +14,15 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_API_BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
 
+# Preset BTC tickers with their lookahead times in seconds
+BTC_TICKERS = {
+    "KXBTC15M": 900,      # 15 minutes
+    "KXBTCD": 3600,        # 1 hour (can also be 24h, 1w depending on market_type)
+    "KXBTC": 86400,        # 1 day (threshold series)
+    "KXBTCMAXMON": 2592000, # 1 month (30 days)
+    "KXBTCY": 31536000,    # 1 year (365 days)
+}
+
 
 @dataclass
 class TradeRecord:
@@ -98,20 +107,35 @@ class TicketHistory:
 
 
 @dataclass
-class TrainingExample:
-    """A single row suitable for training a binary classifier or regressor."""
+class ProbabilityRecord:
+    """A single probability snapshot for a Kalshi ticker at a specific timestamp."""
 
-    ticket_id: str
-    event_ticker: str
+    ticker: str
     timestamp: datetime
     probability: float
-    probability_change: float
-    quantity: float
-    position: int
-    action: int
-    time_since_open_hours: float
-    ticket_time_span_days: float
-    target: int
+    lookahead_seconds: int  # How far ahead this prediction is for (e.g., 900 for 15min)
+
+
+@dataclass
+class TickerChunk:
+    """All probability records for a specific ticker over a time period."""
+
+    ticker: str
+    lookahead_seconds: int
+    probability_records: List[ProbabilityRecord] = field(default_factory=list)
+    window_start: Optional[datetime] = None
+    window_end: Optional[datetime] = None
+
+
+@dataclass
+class TrainingExample:
+    """A single row suitable for training a regressor."""
+
+    ticker: str
+    timestamp: datetime
+    probability: float
+    lookahead_seconds: int
+    target_btc_price: Optional[float] = None
 
 
 class KalshiHistoricalDataBuilder:
@@ -140,81 +164,190 @@ class KalshiHistoricalDataBuilder:
     def build_dataset(self, crypto: str, days: int, raw_only: bool = False) -> Dict[str, Any]:
         window_start, window_end = self._lookback_window(days)
         logger.info(
-            "Building dataset for %s over %s days (%s to %s)",
+            "Building chunked dataset for %s over %s days (%s to %s)",
             crypto,
             days,
             window_start.isoformat(),
             window_end.isoformat(),
         )
-        ticket_payloads = self._fetch_ticket_payloads(crypto, days, window_start, window_end)
-        if not ticket_payloads:
+        
+        # Build chunks for each preset ticker
+        ticker_chunks: List[TickerChunk] = []
+        for ticker, lookahead_seconds in BTC_TICKERS.items():
+            logger.info(f"Fetching probability data for ticker: {ticker} (lookahead: {lookahead_seconds}s)")
+            chunk = self._build_ticker_chunk(ticker, lookahead_seconds, window_start, window_end)
+            if chunk and chunk.probability_records:
+                ticker_chunks.append(chunk)
+                logger.info(f"Built chunk for {ticker}: {len(chunk.probability_records)} probability records")
+        
+        if not ticker_chunks:
             raise RuntimeError(
-                "No live Kalshi ticket payloads were available. "
-                "Ensure the Kalshi API is reachable and the crypto filter is correct."
+                "No probability data was available for any preset tickers. "
+                "Ensure the Kalshi API is reachable and the tickers are valid."
             )
-        logger.info("Fetched %s ticket payloads for %s", len(ticket_payloads), crypto)
-        tickets: List[TicketHistory] = []
-
-        for payload in ticket_payloads:
-            ticket = self._build_ticket_history(payload, crypto, window_start, window_end)
-            if not ticket.trades:
-                continue
-            tickets.append(ticket)
-        logger.info("Built %s candidate tickets with trade history", len(tickets))
-
-        if not tickets:
-            raise RuntimeError(
-                "No live ticket histories with trades were built. "
-                "The Kalshi live trade endpoints returned no usable trades for the requested crypto."
-            )
-
-        training_rows = self._build_training_rows(tickets)
-
-        latest_trade: Optional[TradeRecord] = None
-        for ticket in tickets:
-            if ticket.trades:
-                candidate = ticket.trades[-1]
-                if latest_trade is None or candidate.timestamp > latest_trade.timestamp:
-                    latest_trade = candidate
-        if latest_trade is not None:
-            logger.info(
-                "Latest trade added: ticket=%s trade_id=%s timestamp=%s quantity=%s position=%s action=%s probability=%s price=%s",
-                latest_trade.ticket_id,
-                latest_trade.trade_id,
-                latest_trade.timestamp.isoformat(),
-                latest_trade.quantity,
-                latest_trade.position,
-                latest_trade.action,
-                latest_trade.probability,
-                latest_trade.price,
-            )
-
-        if raw_only:
-            return {
-                "crypto": crypto,
-                "requested_days": days,
-                "window_start": window_start.isoformat(),
-                "window_end": window_end.isoformat(),
-                "training_rows": [self._row_to_dict(row) for row in training_rows],
-                "notes": [
-                    "This export uses the raw trade-row format for direct time-series training.",
-                    "Trades are restricted to the requested rolling lookback window ending at export time.",
-                    "Rows are built only from live Kalshi API trade payloads.",
-                ],
-            }
-
+        
+        # Build training rows from chunks
+        training_rows = self._build_training_rows_from_chunks(ticker_chunks)
+        
+        logger.info(f"Total training rows: {len(training_rows)}")
+        
         return {
             "crypto": crypto,
             "requested_days": days,
             "window_start": window_start.isoformat(),
             "window_end": window_end.isoformat(),
-            "ticket_histories": [ticket.to_dict(include_trades=True) for ticket in tickets],
+            "ticker_chunks": [self._chunk_to_dict(chunk) for chunk in ticker_chunks],
             "training_rows": [self._row_to_dict(row) for row in training_rows],
             "notes": [
-                "The dataset is ticket-centric and preserves buy/sell and yes/no labels.",
-                "Trades are restricted to the requested rolling lookback window ending at export time.",
-                "Rows are built only from live Kalshi API trade payloads.",
+                "Dataset is chunked by ticker with probability snapshots at trade timestamps.",
+                "Each row includes ticker, timestamp, probability, and lookahead_seconds.",
+                "Target BTC price should be aligned to timestamp + lookahead_seconds.",
+                f"Used tickers: {list(BTC_TICKERS.keys())}",
             ],
+        }
+
+    def _build_ticker_chunk(
+        self,
+        ticker: str,
+        lookahead_seconds: int,
+        window_start: datetime,
+        window_end: datetime,
+    ) -> Optional[TickerChunk]:
+        """Build a chunk of probability records for a specific ticker."""
+        # Fetch trades for this ticker within the time window
+        trades = self._fetch_trades_for_ticker(ticker, window_start, window_end)
+        
+        if not trades:
+            logger.warning(f"No trades found for ticker {ticker} in the specified window")
+            return None
+        
+        # Convert trades to probability records
+        probability_records: List[ProbabilityRecord] = []
+        for trade in trades:
+            prob = self._extract_probability_from_trade(trade)
+            if prob is not None:
+                timestamp = self._trade_timestamp(trade)
+                if timestamp:
+                    probability_records.append(
+                        ProbabilityRecord(
+                            ticker=ticker,
+                            timestamp=timestamp,
+                            probability=prob,
+                            lookahead_seconds=lookahead_seconds,
+                        )
+                    )
+        
+        if not probability_records:
+            logger.warning(f"No valid probability records extracted for ticker {ticker}")
+            return None
+        
+        # Sort by timestamp
+        probability_records.sort(key=lambda r: r.timestamp)
+        
+        return TickerChunk(
+            ticker=ticker,
+            lookahead_seconds=lookahead_seconds,
+            probability_records=probability_records,
+            window_start=window_start,
+            window_end=window_end,
+        )
+    
+    def _fetch_trades_for_ticker(
+        self,
+        ticker: str,
+        window_start: datetime,
+        window_end: datetime,
+    ) -> List[Dict[str, Any]]:
+        """Fetch trades for a specific ticker using the trades endpoint."""
+        min_ts = int(window_start.timestamp())
+        max_ts = int(window_end.timestamp())
+        
+        trades: List[Dict[str, Any]] = []
+        params = {
+            "ticker": ticker,
+            "limit": 1000,
+            "min_ts": min_ts,
+            "max_ts": max_ts,
+        }
+        
+        try:
+            items = self._fetch_paginated_items(
+                "/markets/trades",
+                params=params,
+                items_key="trades",
+                max_items=20000,
+            )
+            logger.info(f"Fetched {len(items)} trades for ticker {ticker}")
+            return items
+        except Exception as exc:
+            logger.warning(f"Failed to fetch trades for ticker {ticker}: {exc}")
+            return []
+    
+    def _extract_probability_from_trade(self, trade: Dict[str, Any]) -> Optional[float]:
+        """Extract probability from a trade record."""
+        # Try yes_price_dollars first
+        yes_price = self._coerce_float(trade.get("yes_price_dollars"))
+        if yes_price is not None:
+            return yes_price
+        
+        # Try no_price_dollars and convert
+        no_price = self._coerce_float(trade.get("no_price_dollars"))
+        if no_price is not None:
+            return max(0.0, min(1.0, 1.0 - no_price))
+        
+        # Try probability field directly
+        prob = self._coerce_float(trade.get("probability"))
+        if prob is not None:
+            return prob
+        
+        return None
+    
+    def _build_training_rows_from_chunks(self, chunks: List[TickerChunk]) -> List[TrainingExample]:
+        """Build training rows from ticker chunks."""
+        training_rows: List[TrainingExample] = []
+        
+        for chunk in chunks:
+            for prob_record in chunk.probability_records:
+                training_rows.append(
+                    TrainingExample(
+                        ticker=chunk.ticker,
+                        timestamp=prob_record.timestamp,
+                        probability=prob_record.probability,
+                        lookahead_seconds=chunk.lookahead_seconds,
+                        target_btc_price=None,  # Will be filled during alignment
+                    )
+                )
+        
+        # Sort by timestamp
+        training_rows.sort(key=lambda r: r.timestamp)
+        return training_rows
+    
+    def _chunk_to_dict(self, chunk: TickerChunk) -> Dict[str, Any]:
+        """Convert a TickerChunk to dictionary for JSON serialization."""
+        return {
+            "ticker": chunk.ticker,
+            "lookahead_seconds": chunk.lookahead_seconds,
+            "window_start": chunk.window_start.isoformat() if chunk.window_start else None,
+            "window_end": chunk.window_end.isoformat() if chunk.window_end else None,
+            "probability_records": [
+                {
+                    "ticker": r.ticker,
+                    "timestamp": r.timestamp.isoformat(),
+                    "probability": r.probability,
+                    "lookahead_seconds": r.lookahead_seconds,
+                }
+                for r in chunk.probability_records
+            ],
+        }
+    
+    def _row_to_dict(self, row: TrainingExample) -> Dict[str, Any]:
+        """Convert a TrainingExample to dictionary for JSON serialization."""
+        return {
+            "ticker": row.ticker,
+            "timestamp": row.timestamp.isoformat(),
+            "probability": row.probability,
+            "lookahead_seconds": row.lookahead_seconds,
+            "target_btc_price": row.target_btc_price,
         }
 
     def _fetch_ticket_payloads(

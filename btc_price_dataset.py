@@ -91,6 +91,7 @@ class CryptoPriceDatasetBuilder:
         granularity: str = "1m",
         align_with: Optional[str] = None,
         price_source: str = "auto",
+        align_with_lookahead: bool = True,
     ) -> Dict[str, Any]:
         window_start, window_end = lookback_window(days)
         product = product_id(crypto)
@@ -110,12 +111,12 @@ class CryptoPriceDatasetBuilder:
             )
 
         if align_with:
-            target_timestamps = self._load_alignment_timestamps(align_with)
-            y_rows = self._rows_at_timestamps(price_points, target_timestamps, window_start, window_end)
+            target_data = self._load_alignment_data(align_with)
+            y_rows = self._rows_at_timestamps_with_lookahead(price_points, target_data, window_start, window_end)
             notes = [
                 "Y rows are aligned to timestamps from the Kalshi X dataset (training_rows).",
                 "Row order matches the Kalshi export order.",
-                "Each price is the most recent market price at or before the aligned timestamp.",
+                "Each price is the most recent market price at or before (timestamp + lookahead_seconds).",
                 "Train/test splitting is not performed here; split X and Y together downstream.",
             ]
         else:
@@ -325,7 +326,8 @@ class CryptoPriceDatasetBuilder:
         logger.info("Fetched %s trades for %s", len(trades), product)
         return trades
 
-    def _load_alignment_timestamps(self, path: str) -> List[datetime]:
+    def _load_alignment_data(self, path: str) -> List[Tuple[datetime, int]]:
+        """Load timestamps and lookahead_seconds from Kalshi dataset."""
         with open(path, encoding="utf-8") as handle:
             payload = json.load(handle)
 
@@ -335,10 +337,16 @@ class CryptoPriceDatasetBuilder:
                 f"{path!r} must contain a non-empty training_rows list from kalshi_crypto_pipeline."
             )
 
-        timestamps = [parse_datetime(str(row["timestamp"])) for row in rows if "timestamp" in row]
-        if not timestamps:
+        data = []
+        for row in rows:
+            if "timestamp" in row:
+                timestamp = parse_datetime(str(row["timestamp"]))
+                lookahead = row.get("lookahead_seconds", 0)
+                data.append((timestamp, lookahead))
+        
+        if not data:
             raise ValueError(f"{path!r} did not provide any timestamps for Y alignment.")
-        return timestamps
+        return data
 
     def _rows_at_timestamps(
         self,
@@ -354,12 +362,42 @@ class CryptoPriceDatasetBuilder:
         for target_time in target_timestamps:
             if target_time < window_start or target_time > window_end:
                 continue
-            index = bisect.bisect_right(point_times, int(target_time.timestamp())) - 1
+            # Add 1 second to target timestamp for parity with Kalshi dataset
+            adjusted_time = target_time + timedelta(seconds=1)
+            index = bisect.bisect_right(point_times, int(adjusted_time.timestamp())) - 1
             if index < 0:
                 continue
             rows.append(
                 {
                     "timestamp": isoformat_z(target_time),
+                    "price": point_prices[index],
+                }
+            )
+        return rows
+
+    def _rows_at_timestamps_with_lookahead(
+        self,
+        price_points: Sequence[Dict[str, Any]],
+        target_data: Sequence[Tuple[datetime, int]],
+        window_start: datetime,
+        window_end: datetime,
+    ) -> List[Dict[str, Any]]:
+        point_times = [point["unix_time"] for point in price_points]
+        point_prices = [point["price"] for point in price_points]
+        rows: List[Dict[str, Any]] = []
+
+        for target_time, lookahead_seconds in target_data:
+            if target_time < window_start or target_time > window_end:
+                continue
+            # Add lookahead seconds to target timestamp to get the future price
+            adjusted_time = target_time + timedelta(seconds=lookahead_seconds)
+            index = bisect.bisect_right(point_times, int(adjusted_time.timestamp())) - 1
+            if index < 0:
+                continue
+            rows.append(
+                {
+                    "timestamp": isoformat_z(target_time),
+                    "lookahead_seconds": lookahead_seconds,
                     "price": point_prices[index],
                 }
             )
