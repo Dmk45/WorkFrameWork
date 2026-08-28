@@ -22,7 +22,7 @@ modelwork2/
 │   ├── distributed.zig            # Distributed training utilities
 │   ├── model_builder.zig          # Model construction utilities
 │   ├── matlab.zig                 # Activation functions (ReLU, Sigmoid, etc.)
-│   └── mloader/                   # Data loading modules
+│   └── mloader/                   # Model persistence (save/load)
 ├── tests/
 │   ├── Modelrunt.zig              # Crypto price prediction test
 │   ├── crypto_dataset.zig         # Dataset loading utilities
@@ -134,6 +134,77 @@ DataLoader with:
 - Prefetching and caching
 - Data augmentation support
 - Train/validation/test splitting
+
+### Model Persistence (mloader/)
+
+Model persistence enables saving and loading complete neural network models to/from files, similar to PyTorch's approach. The implementation separates model architecture (human-readable JSON) from parameter data (compact binary) in a single file.
+
+#### File Format
+
+Model files (`.sig` extension) contain:
+
+1. **JSON Length (4 bytes)** - Little-endian u32 indicating JSON structure size
+2. **JSON Structure** - Model architecture with:
+   - `layers` array containing each layer's type, index, and configuration
+   - `param_paths` array with hierarchical parameter paths (e.g., `"layers.0.weights"`)
+3. **Binary Parameters** with header:
+   - Magic string: `"SIGMODEL"` (8 bytes)
+   - Version: `1` (4 bytes, little-endian)
+   - Parameter count (4 bytes, little-endian)
+   - For each parameter: path, shape, dtype, and f32 values
+
+#### Key Components
+
+**DataObject Enhancement** (`src/matrix.zig`):
+- Added `param_path: ?[]const u8` field to track parameter location during serialization
+
+**Layer Type Identification** (`src/layers.zig`):
+- Added `LayerType` enum (linear, conv1d, conv2d, conv3d, lstm, gru)
+- Added `layer_type` field to `Layer` struct for serialization
+- Updated all layer initializations to set layer type
+
+**Save Functionality** (`src/mloader/save.zig`):
+- `extractParams()`: Traverses model, assigns param paths, collects layer configs
+- `serializeStructure()`: Serializes model architecture to JSON
+- `serializeParams()`: Writes parameter data in binary format
+- `saveModel()`: Combined save function writing structure + params to file
+
+**Load Functionality** (`src/mloader/load.zig`):
+- `deserializeStructure()`: Parses JSON structure
+- `reconstructModel()`: Instantiates NeuralNetwork from structure
+- `loadParams()`: Reads binary parameters and populates tensors with path matching
+- `loadModel()`: Combined load function reading full model from file
+
+#### Usage Example
+
+```zig
+const mloader_save = @import("src/mloader/save.zig");
+const mloader_load = @import("src/mloader/load.zig");
+
+// Save a model
+try mloader_save.saveModel(allocator, &neural_network, "my_model.sig");
+
+// Load a model
+var loaded_nn = try mloader_load.loadModel(allocator, "my_model.sig");
+defer loaded_nn.deinit();
+```
+
+#### Supported Layer Types
+
+- **LinearLayer**: Fully connected layers with weights and bias
+- **Conv1DLayer**: 1D convolutional layers
+- **Conv2DLayer**: 2D convolutional layers
+- **Conv3DLayer**: 3D convolutional layers
+- **LSTMCell**: LSTM cells with input/hidden weights and bias
+- **GRUCell**: GRU cells with input/hidden weights and bias
+
+#### Parameter Path Convention
+
+Parameters are identified by hierarchical paths:
+- Linear layers: `"layers.{index}.weights"`, `"layers.{index}.bias"`
+- Convolutional layers: `"layers.{index}.weights"`, `"layers.{index}.bias"`
+- LSTM cells: `"layers.{index}.w_ih"`, `"layers.{index}.w_hh"`, `"layers.{index}.bias"`
+- GRU cells: `"layers.{index}.w_ih"`, `"layers.{index}.w_hh"`, `"layers.{index}.bias"`
 
 ## Development History
 
@@ -553,8 +624,7 @@ pub fn main() !void {
 ### Known Limitations
 - CPU-only execution (no GPU support)
 - No kernel fusion or SIMD optimizations
-- Limited layer types (no Conv2D, Attention, etc.)
-- No model serialization/export
+- Limited layer types (no Attention, Transformers, etc.)
 - No distributed training
 - Limited documentation and examples
 - Performance gap with mature frameworks
