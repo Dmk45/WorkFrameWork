@@ -24,8 +24,6 @@ modelwork2/
 │   ├── matlab.zig                 # Activation functions (ReLU, Sigmoid, etc.)
 │   └── mloader/                   # Model persistence (save/load)
 ├── tests/
-│   ├── Modelrunt.zig              # Crypto price prediction test
-│   ├── crypto_dataset.zig         # Dataset loading utilities
 │   ├── framework_tests.zig        # Core framework tests
 │   └── test_layers.zig            # Layer-specific tests
 ├── build.zig                      # Zig build configuration
@@ -246,17 +244,6 @@ Key commits:
 - 4e6ca3b (2026-05-03): Refactor backpropagation gradient computation
 - 4521d95 (2026-05-01): Refactor memory management in tensor operations
 
-### Kalshi Integration (June-July 2026)
-- Integrated Kalshi crypto price prediction pipeline
-- Created correspondence between Python data pipeline and Zig framework
-- Added dynamic model type loading
-- Implemented model persistence preparation
-
-Key commits:
-- b51d87e (2026-07-10): Added crypto data pipeline in prep for test with framework
-- 68c0d16 (2026-07-16): Test + added correspondence between crypto pipeline and btc_price_dataset
-- b2382ed (2026-07-19): Full JSON dataset
-
 ### Performance Optimization (July 2026)
 - Identified performance bottlenecks in training loop
 - Implemented batch tensor reuse to reduce allocations
@@ -267,135 +254,6 @@ Key commits:
 
 Key commits:
 - 2d1fa5b (2026-07-23): Clean up + eval against PyTorch
-
-## Kalshi Crypto Price Prediction Test
-
-### Overview
-
-The Kalshi test (`tests/Modelrunt.zig`) serves as a real-world evaluation of the framework's capabilities for time series prediction tasks. It trains a neural network to predict cryptocurrency prices using historical data from Kalshi markets.
-
-### Dataset
-
-The test uses two datasets:
-- **X dataset**: `kalshi_training_120d_dataset.json` - Historical price features (120-day windows)
-- **Y dataset**: `btc_price_dataset.json` - Target Bitcoin prices
-
-Data preprocessing includes:
-- Feature normalization
-- Train/validation split (80/20)
-- Batching with configurable batch size
-
-### Model Architecture
-
-The `CryptoForecaster` model consists of:
-- Input layer matching feature dimension
-- Hidden layers with configurable sizes
-- ReLU activations
-- Output layer for regression
-- Adam optimizer for training
-
-### Training Configuration
-
-Default configuration:
-- Epochs: 10
-- Batch size: 32
-- Learning rate: 0.001
-- Hidden layers: [128, 64, 32]
-- Activation: ReLU
-
-### Performance Analysis
-
-#### Initial Performance Issues
-
-The initial implementation exhibited significant performance bottlenecks:
-- **Epoch runtime**: Significantly slower than equivalent PyTorch implementation
-- **Memory allocation**: Excessive allocations per batch (new tensors for each batch)
-- **Data copying**: Element-by-element copying instead of bulk operations
-- **Layer operations**: Unnecessary allocations in forward passes
-
-#### Identified Bottlenecks
-
-1. **Batch Tensor Allocation**: Every batch created new `DataObject` allocations for inputs and targets
-2. **Activation Functions**: Copy-activate-deinit pattern in layer forward passes
-3. **Bias Addition**: Separate allocation for bias addition operation
-4. **Data Copying**: Manual element-by-element copying in batch preparation
-5. **Optimizer State**: Per-step reallocation checks for Adam moment buffers
-
-#### Performance Optimizations Implemented
-
-1. **Batch Tensor Reuse**
-   - Pre-allocate batch tensors once per epoch
-   - Reuse across all batches instead of reallocating
-   - Applied to both training and validation loops
-   - Expected gain: 50-70% reduction in allocation overhead
-
-2. **memcpy for Batch Copying**
-   - Replaced element-by-element copying with `@memcpy`
-   - Bulk memory transfer for feature data
-   - Expected gain: 2-3x faster batch creation
-
-3. **In-place Activations**
-   - Modified `defaultLinearForward` to apply ReLU/Sigmoid in-place
-   - Eliminated copy-activate-deinit pattern
-   - Expected gain: 30-40% faster forward passes
-
-4. **In-place Bias Addition**
-   - Added `addBiasInPlace()` function
-   - Modified forward pass to use in-place bias addition
-   - Eliminated one allocation per layer per forward pass
-   - Expected gain: 20-30% reduction in allocations
-
-5. **In-place Math Operations**
-   - Added `addInPlace()`, `subInPlace()`, `mulInPlace()`, `divInPlace()`
-   - Available for future optimizations where safe
-
-6. **Optimizer State Pre-allocation**
-   - Added `preallocate()` method to Adam optimizer
-   - Added `preallocateOptimizerState()` to LinearLayer and NeuralNetwork
-   - Called once during model initialization
-   - Expected gain: Eliminates per-step realloc checks
-
-### Performance Comparison: ModelWork2 vs PyTorch
-
-#### Before Optimization
-
-- **ModelWork2**: Significantly slower epoch runtime
-- **PyTorch**: Faster execution due to:
-  - Optimized tensor operations (C++ backend)
-  - Memory pooling and reuse
-  - Kernel fusion
-  - SIMD optimizations
-  - Just-in-time compilation
-
-#### After Optimization
-
-The implemented optimizations are expected to reduce epoch runtime by 60-80% compared to the original implementation. However, PyTorch remains faster due to:
-
-1. **Mature Optimization**: PyTorch has years of optimization work
-2. **C++ Backend**: Low-level optimizations not easily replicable in Zig
-3. **GPU Support**: CUDA acceleration for tensor operations
-4. **Kernel Fusion**: Combining operations to reduce memory bandwidth
-5. **SIMD Utilization**: Vectorized operations for CPU computations
-
-#### Performance Gap Analysis
-
-The remaining performance gap can be attributed to:
-
-- **CPU-only execution**: ModelWork2 currently runs on CPU only
-- **No kernel fusion**: Each operation is separate
-- **No SIMD optimizations**: Scalar operations only
-- **Memory allocation overhead**: Even with reuse, some allocation overhead remains
-- **Interpreted execution**: No JIT compilation
-
-#### Closing the Gap
-
-To further close the performance gap with PyTorch, consider:
-
-1. **SIMD Optimizations**: Add vectorized operations using Zig's SIMD support
-2. **Kernel Fusion**: Combine consecutive operations into single kernels
-3. **Memory Pooling**: Arena allocators for temporary tensors
-4. **GPU Support**: Add CUDA/Vulkan backend for acceleration
-5. **BLAS Integration**: Use optimized BLAS libraries for matrix operations
 
 ## Key Methods Reference
 
@@ -558,8 +416,6 @@ zig build test -- -test-filter <test_name>
 # Generate documentation
 zig build docs
 
-# Run crypto model trainer
-zig build crypto-model
 ```
 
 ### Example Usage
@@ -640,5 +496,4 @@ pub fn main() !void {
 
 ## Conclusion
 
-ModelWork2 represents a functional machine learning framework implemented in Zig with explicit memory management and zero-cost abstractions. The Kalshi crypto price prediction test demonstrates the framework's capabilities for real-world time series prediction tasks. Recent performance optimizations have significantly reduced the runtime gap with PyTorch, though a performance gap remains due to PyTorch's mature optimization ecosystem. The framework provides a solid foundation for further development and optimization.
-
+ModelWork2 represents a functional machine learning framework implemented in Zig with explicit memory management and zero-cost abstractions. Recent performance optimizations have reduced the runtime gap with mature frameworks, while the project continues to focus on core numerical computing, model training, and documentation.

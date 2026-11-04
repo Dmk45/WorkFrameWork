@@ -1,0 +1,7 @@
+__pycache__/
+.pytest_cache/
+.zig-cache/
+zig-out/
+
+kalshi_training*.json
+btc_price*.json
